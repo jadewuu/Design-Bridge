@@ -1,0 +1,179 @@
+# get_code Cache Layer Design
+
+## Status
+
+Implemented on `main`.
+
+This document describes the shipped architecture, not a speculative proposal.
+
+## Problem the cache layer solves
+
+`get_code` was spending too much time on repeated Figma-side reads for the same node and the same style/variable ids.
+The slow part was not only `getCSSAsync()`, but the repeated follow-up reads around it:
+
+- `fills` / `strokes`
+- `fillStyleId` / `strokeStyleId`
+- `effects` / `clipsContent`
+- `layoutMode` / `inferredAutoLayout`
+- `layoutSizingHorizontal` / `layoutSizingVertical`
+- `relativeTransform` / `constraints`
+- `figma.getStyleById()`
+- `figma.variables.getVariableById()`
+
+Those reads used to be spread across asset planning, extension-owned style resolution, background cleanup, layout inference, vector analysis, and token mapping.
+
+## Implemented architecture
+
+### Request scope only
+
+The cache exists only for one `handleGetCode()` execution.
+Nothing is persisted across requests.
+
+### Package boundary
+
+- `packages/extension` owns the request cache.
+- `packages/extension` also owns the Figma style-resolution helpers used by UI codegen and `get_code`.
+- A narrow `FigmaLookupReaders` interface is still used internally so cache-backed and direct Figma lookups can share the same pure paint-resolution helpers.
+
+### Cache context
+
+The request creates one `GetCodeCacheContext` containing:
+
+```ts
+type GetCodeCacheContext = {
+  readers: FigmaLookupReaders
+  variables: Map<string, Variable | null>
+  styles: Map<string, BaseStyle | null>
+  paintStyles: Map<string, PaintStyleSummary | null>
+  nodeSemantics: Map<string, NodeSemanticSnapshot>
+  vectorAnalysis: Map<string, VectorColorModel>
+  metrics?: CacheMetrics
+}
+```
+
+It is created in `handleGetCode()` and threaded through:
+
+- `buildVariableMappings()`
+- `planAssets()`
+- `collectNodeData()`
+- `prepareStyles()`
+- `exportVectorAssets()`
+
+### Lookup readers
+
+`packages/extension/utils/figma-style/types.ts` exports:
+
+```ts
+type FigmaLookupReaders = {
+  getStyleById(id: string): BaseStyle | null
+  getVariableById(id: string): Variable | null
+}
+```
+
+The extension-backed reader implementation dedupes request-local `figma.getStyleById()` and `figma.variables.getVariableById()` calls.
+
+### Node semantics
+
+`NodeSemanticSnapshot` is a lazy read-through cache keyed by `node.id`.
+
+It preserves:
+
+- paint arrays as `missing | unsupported | array`
+- fill/stroke style ids
+- derived booleans such as visible fill/stroke, renderable stroke, image fill, visible effects
+- explicit and inferred layout fields
+- clipping and mask state
+- geometry fields needed by positioning helpers
+
+The important part is that unsupported values stay unsupported.
+The cache records what Figma returned; it does not synthesize alternate semantics.
+
+### Paint-style summaries
+
+`PaintStyleSummary` stores:
+
+- raw style paints
+- visible paint count
+- single visible paint
+- single visible solid paint
+- single visible solid color
+
+It intentionally does not cache gradient strings by `styleId` alone.
+Gradients still depend on the current node size and are resolved at the call site from cached raw paints plus the current width/height.
+
+### Vector analysis
+
+Vector color-model detection now reuses:
+
+- cached node semantics for paint/effect/mask state
+- cached paint-style summaries for single-solid style-backed channels
+- cached variable lookups for variable-backed solid colors
+
+Per-root vector analysis results are cached in `ctx.vectorAnalysis`.
+
+## Metrics and tracing
+
+The cache layer exposes optional request metrics:
+
+```ts
+type CacheMetrics = {
+  nodeSemanticHits: number
+  nodeSemanticMisses: number
+  styleHits: number
+  styleMisses: number
+  paintStyleHits: number
+  paintStyleMisses: number
+  variableHits: number
+  variableMisses: number
+  vectorAnalysisHits: number
+  vectorAnalysisMisses: number
+  vectorExportCandidates: number
+  vectorExportSkippedMissing: number
+  vectorExportSkippedZeroBounds: number
+  vectorExportNull: number
+  vectorExportUploaded: number
+  vectorExportThemeableInline: number
+  vectorExportRawInline: number
+}
+```
+
+In dev builds, `get_code` trace output logs:
+
+- stage timings
+- node/style/paint-style/variable/vector-analysis cache hit rates
+- vector export result breakdown
+
+This keeps performance investigation architectural instead of adding throwaway trace code to each pass.
+
+## What this design does not do
+
+- No cross-request caching.
+- No caching of final markup or CSS maps.
+- No caching of `getCSSAsync()` across requests.
+- No per-pass one-off caches that duplicate the central request context.
+
+Within one request, `getCSSAsync()` is still called once per collected node.
+The cache layer reduces the expensive reads around that call, not the safety boundary of the call itself.
+Regression fixtures enforce that count, assert zero CSS reads for skipped descendants, and verify
+that repeated layout-semantic access produces one cache miss followed by hits per node.
+
+## Current limitations
+
+The request cache removed a large amount of duplicate lookup work, but the next real bottlenecks are now clearer:
+
+- `collectNodeData()` still dominates large selections.
+- `NodeSemanticSnapshot` currently reads paint, layout, and geometry together on first miss.
+- The descendant-text preflight now avoids full collection and asset/export work when text alone
+  proves the response cannot fit. Overflow caused by markup, token metadata, or formatted response
+  overhead still falls back after full collection.
+
+## Next work
+
+The next useful optimization steps are:
+
+1. Split node semantics into lazier paint/layout/geometry buckets.
+2. Add finer-grained `collect` trace stages, especially around `getCSSAsync()` and per-node post-processing.
+3. Measure markup-heavy and vector-heavy overflow fixtures that the text preflight cannot prove, then
+   decide whether a safe second checkpoint can skip export without guessing final output.
+4. Measure the bounded two-root vector export batches on realistic vector-heavy fixtures before
+   changing that cap; preserve the current source-order merge if the cap changes.

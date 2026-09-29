@@ -1,0 +1,101 @@
+import { describe, expect, it, vi } from 'vitest'
+
+import type { VisibleTree } from '@/mcp/tools/code/model'
+
+const mocks = vi.hoisted(() => ({
+  patchNegativeGapStyles: vi.fn(),
+  canonicalizeAutoLayoutStyles: vi.fn(),
+  ensureRelativeForAbsoluteChildren: vi.fn(),
+  applyAbsoluteStackingOrder: vi.fn()
+}))
+
+vi.mock('@/mcp/tools/code/sanitize/negative-gap', () => ({
+  patchNegativeGapStyles: mocks.patchNegativeGapStyles
+}))
+
+vi.mock('@/mcp/tools/code/sanitize/auto-layout-canonical', () => ({
+  canonicalizeAutoLayoutStyles: mocks.canonicalizeAutoLayoutStyles
+}))
+
+vi.mock('@/mcp/tools/code/sanitize/relative-parent', () => ({
+  ensureRelativeForAbsoluteChildren: mocks.ensureRelativeForAbsoluteChildren
+}))
+
+vi.mock('@/mcp/tools/code/sanitize/stacking', () => ({
+  applyAbsoluteStackingOrder: mocks.applyAbsoluteStackingOrder
+}))
+
+import { sanitizeStyles } from '@/mcp/tools/code/sanitize'
+
+function firstInvocationOrder(mock: { mock: { invocationCallOrder: number[] } }): number {
+  const [order] = mock.mock.invocationCallOrder
+  if (order === undefined) throw new Error('Expected mock to be called')
+  return order
+}
+
+describe('sanitize/index sanitizeStyles', () => {
+  it('applies all style patches in declared order', () => {
+    const tree = { nodes: new Map(), order: [] } as unknown as VisibleTree
+    const styles = new Map<string, Record<string, string>>()
+    const svgRoots = new Set<string>(['svg-root'])
+
+    sanitizeStyles(tree, styles, svgRoots)
+
+    expect(mocks.patchNegativeGapStyles).toHaveBeenCalledWith(tree, styles, svgRoots, undefined)
+    expect(mocks.canonicalizeAutoLayoutStyles).toHaveBeenCalledWith(
+      tree,
+      styles,
+      svgRoots,
+      undefined
+    )
+    expect(mocks.ensureRelativeForAbsoluteChildren).toHaveBeenCalledWith(
+      tree,
+      styles,
+      svgRoots,
+      undefined
+    )
+    expect(mocks.applyAbsoluteStackingOrder).toHaveBeenCalledWith(tree, styles, svgRoots, undefined)
+
+    expect(firstInvocationOrder(mocks.patchNegativeGapStyles)).toBeLessThan(
+      firstInvocationOrder(mocks.canonicalizeAutoLayoutStyles)
+    )
+    expect(firstInvocationOrder(mocks.canonicalizeAutoLayoutStyles)).toBeLessThan(
+      firstInvocationOrder(mocks.ensureRelativeForAbsoluteChildren)
+    )
+    expect(firstInvocationOrder(mocks.ensureRelativeForAbsoluteChildren)).toBeLessThan(
+      firstInvocationOrder(mocks.applyAbsoluteStackingOrder)
+    )
+  })
+
+  it('passes undefined svg roots through to every patch', () => {
+    const tree = { nodes: new Map(), order: [] } as unknown as VisibleTree
+    const styles = new Map<string, Record<string, string>>()
+
+    sanitizeStyles(tree, styles)
+
+    expect(mocks.patchNegativeGapStyles).toHaveBeenLastCalledWith(
+      tree,
+      styles,
+      undefined,
+      undefined
+    )
+    expect(mocks.canonicalizeAutoLayoutStyles).toHaveBeenLastCalledWith(
+      tree,
+      styles,
+      undefined,
+      undefined
+    )
+    expect(mocks.ensureRelativeForAbsoluteChildren).toHaveBeenLastCalledWith(
+      tree,
+      styles,
+      undefined,
+      undefined
+    )
+    expect(mocks.applyAbsoluteStackingOrder).toHaveBeenLastCalledWith(
+      tree,
+      styles,
+      undefined,
+      undefined
+    )
+  })
+})

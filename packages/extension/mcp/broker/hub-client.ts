@@ -1,0 +1,521 @@
+import type {
+  DesignTaskStateMessage,
+  DesignActionMessage,
+  DesignActionResultMessage,
+  FigmaSessionsMessage,
+  MessageToExtension,
+  RegisteredMessage,
+  RuntimeHelloMessage,
+  StateMessage,
+  ToolCallMessage,
+  ToolResultMessage
+} from '@tempad-dev/shared'
+
+import {
+  MCP_PORT_CANDIDATES,
+  TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION,
+  TEMPAD_MCP_BRIDGE_SUBPROTOCOL,
+  parseMessageToExtension
+} from '@tempad-dev/shared'
+
+const RECONNECT_DELAY_MS = 3000
+const KEEPALIVE_INTERVAL_MS = 20000
+const PORT_PROBE_TIMEOUT_MS = 500
+const HUB_HANDSHAKE_TIMEOUT_MS = 1000
+const LOCAL_HUB_UNREACHABLE_MESSAGE =
+  'MCP server is not running. Start your agent or copy the MCP configuration from Agent integration.'
+
+type HubConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error'
+
+type HubClientSnapshot = {
+  activeId: string | null
+  assetServerUrl: string | null
+  errorMessage: string | null
+  registeredId: string | null
+  status: HubConnectionStatus
+}
+
+type McpHubClientEvents = {
+  onSnapshot?: (snapshot: HubClientSnapshot) => void
+  onToolCall?: (message: ToolCallMessage) => void
+  onDesignActionResult?: (message: DesignActionResultMessage) => void
+  onDesignTask?: (message: DesignTaskStateMessage) => void
+}
+
+type WebSocketFactory = (url: string, protocol: string) => WebSocket
+
+type HubConnection = {
+  registered: RegisteredMessage
+  state: StateMessage
+  ws: WebSocket
+}
+
+class McpBridgeProtocolMismatchError extends Error {}
+
+export class McpHubClient {
+  private activeId: string | null = null
+  private assetServerUrl: string | null = null
+  private candidateSocket: WebSocket | null = null
+  private connectPromise: Promise<void> | null = null
+  private connectionEpoch = 0
+  private enabled = false
+  private errorMessage: string | null = null
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null
+  private lastSuccessfulPort: number | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private registeredId: string | null = null
+  private status: HubConnectionStatus = 'idle'
+  private ws: WebSocket | null = null
+
+  constructor(
+    private readonly events: McpHubClientEvents = {},
+    private readonly createWebSocket: WebSocketFactory = (url, protocol) =>
+      new WebSocket(url, protocol),
+    private readonly runtimeIdentity: RuntimeHelloMessage | null = null
+  ) {}
+
+  getSnapshot(): HubClientSnapshot {
+    return {
+      activeId: this.activeId,
+      assetServerUrl: this.assetServerUrl,
+      errorMessage: this.errorMessage,
+      registeredId: this.registeredId,
+      status: this.status
+    }
+  }
+
+  start(): void {
+    if (!this.enabled) {
+      this.connectionEpoch++
+    }
+    this.enabled = true
+    this.ensureConnected()
+  }
+
+  stop(): void {
+    this.enabled = false
+    this.connectionEpoch++
+    this.connectPromise = null
+    this.clearReconnectTimer()
+    this.cleanupSocket()
+    this.activeId = null
+    this.assetServerUrl = null
+    this.errorMessage = null
+    this.registeredId = null
+    this.status = 'idle'
+    this.emitSnapshot()
+  }
+
+  private ensureConnected(): void {
+    if (!this.enabled || this.status === 'connected' || this.connectPromise) {
+      return
+    }
+    const trackedPromise = this.connect(this.connectionEpoch).finally(() => {
+      if (this.connectPromise === trackedPromise) {
+        this.connectPromise = null
+      }
+    })
+    this.connectPromise = trackedPromise
+  }
+
+  sendActivate(): void {
+    this.sendJson({ type: 'activate' })
+  }
+
+  sendToolResult(message: ToolResultMessage): void {
+    this.sendJson(message)
+  }
+
+  sendSessions(message: FigmaSessionsMessage): void {
+    this.sendJson(message)
+  }
+
+  sendDesignAction(message: DesignActionMessage): void {
+    this.sendJson(message)
+  }
+
+  private async connect(epoch: number): Promise<void> {
+    this.clearReconnectTimer()
+    this.status = 'connecting'
+    this.errorMessage = null
+    this.emitSnapshot()
+
+    let protocolMismatch: McpBridgeProtocolMismatchError | null = null
+    for (const candidatePort of this.getPortCandidates()) {
+      if (!this.isCurrentConnection(epoch)) return
+      try {
+        const isReachable = await probeLocalHubPort(candidatePort)
+        if (!this.isCurrentConnection(epoch)) return
+        if (!isReachable) continue
+
+        const connection = await this.openHubConnection(candidatePort)
+        if (!this.isCurrentConnection(epoch)) {
+          closeWebSocket(connection.ws)
+          return
+        }
+        this.attachSocket(connection.ws)
+        this.handleHubMessage(connection.registered)
+        if (this.runtimeIdentity) this.sendJson(this.runtimeIdentity)
+        this.handleHubMessage(connection.state)
+        if (!this.isCurrentConnection(epoch) || this.ws !== connection.ws) return
+        this.lastSuccessfulPort = candidatePort
+        this.startKeepalive()
+        return
+      } catch (error) {
+        if (!this.isCurrentConnection(epoch)) return
+        if (error instanceof McpBridgeProtocolMismatchError) {
+          protocolMismatch = error
+        }
+      }
+    }
+
+    if (!this.isCurrentConnection(epoch)) return
+    this.cleanupSocket()
+    this.status = 'error'
+    this.errorMessage = protocolMismatch?.message ?? LOCAL_HUB_UNREACHABLE_MESSAGE
+    this.emitSnapshot()
+    this.scheduleReconnect()
+  }
+
+  private isCurrentConnection(epoch: number): boolean {
+    return this.enabled && this.connectionEpoch === epoch
+  }
+
+  private getPortCandidates(): number[] {
+    if (this.lastSuccessfulPort && MCP_PORT_CANDIDATES.includes(this.lastSuccessfulPort)) {
+      return [
+        this.lastSuccessfulPort,
+        ...MCP_PORT_CANDIDATES.filter((port) => port !== this.lastSuccessfulPort)
+      ]
+    }
+    return [...MCP_PORT_CANDIDATES]
+  }
+
+  private openHubConnection(port: number): Promise<HubConnection> {
+    return new Promise((resolve, reject) => {
+      const ws = this.createWebSocket(`ws://127.0.0.1:${port}`, TEMPAD_MCP_BRIDGE_SUBPROTOCOL)
+      this.candidateSocket = ws
+      let registered: RegisteredMessage | null = null
+      let state: StateMessage | null = null
+      let settled = false
+
+      const timer = setTimeout(() => {
+        fail(new Error('MCP server handshake timed out'))
+      }, HUB_HANDSHAKE_TIMEOUT_MS)
+
+      const cleanup = () => {
+        clearTimeout(timer)
+        ws.removeEventListener('message', handleMessage)
+        ws.removeEventListener('close', handleClose)
+        ws.removeEventListener('error', handleError)
+        if (this.candidateSocket === ws) {
+          this.candidateSocket = null
+        }
+      }
+      const fail = (error: Error) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        closeWebSocket(ws)
+        reject(error)
+      }
+      const finish = () => {
+        if (settled || !registered || !state) return
+        settled = true
+        cleanup()
+        resolve({ registered, state, ws })
+      }
+      const handleMessage = (event: Event) => {
+        const message = parseHubMessage(event)
+        if (!message) {
+          fail(
+            isRegistrationFrame(event)
+              ? createProtocolMismatchError()
+              : new Error('Received malformed MCP server handshake')
+          )
+          return
+        }
+        if (message.type === 'registered') {
+          if (!servesThisExtension(message)) {
+            fail(createProtocolMismatchError(message))
+            return
+          }
+          if (registered) {
+            fail(new Error('Received duplicate MCP server registration'))
+            return
+          }
+          registered = message
+        } else if (message.type === 'state') {
+          if (state) {
+            fail(new Error('Received duplicate MCP server state'))
+            return
+          }
+          if (!isAllowedAssetServerUrl(message.assetServerUrl)) {
+            fail(new Error('MCP server advertised a non-loopback asset URL'))
+            return
+          }
+          state = message
+        } else {
+          fail(new Error('Received tool traffic during MCP server handshake'))
+          return
+        }
+        finish()
+      }
+      const handleClose = () => {
+        fail(new Error('MCP server connection closed during handshake'))
+      }
+      const handleError = (event: Event) => {
+        const error = getErrorEventMessage(event) ?? 'open failed'
+        fail(new Error(error))
+      }
+
+      ws.addEventListener('message', handleMessage)
+      ws.addEventListener('close', handleClose, { once: true })
+      ws.addEventListener('error', handleError, { once: true })
+    })
+  }
+
+  private attachSocket(ws: WebSocket): void {
+    this.cleanupSocket()
+    this.ws = ws
+    ws.addEventListener('message', (event) => this.handleMessage(ws, event as MessageEvent<string>))
+    ws.addEventListener('close', (event) => this.handleClose(ws, event as CloseEvent))
+    ws.addEventListener('error', (event) => this.handleError(ws, event))
+  }
+
+  private handleMessage(ws: WebSocket, event: MessageEvent<string>): void {
+    if (this.ws !== ws) return
+    const message = parseHubMessage(event)
+    if (!message) {
+      this.rejectConnectedMessage(
+        ws,
+        isRegistrationFrame(event)
+          ? createProtocolMismatchError().message
+          : 'Received malformed message from MCP server'
+      )
+      return
+    }
+    if (message.type === 'registered') {
+      this.rejectConnectedMessage(
+        ws,
+        servesThisExtension(message)
+          ? 'Received duplicate registration from MCP server'
+          : createProtocolMismatchError(message).message
+      )
+      return
+    }
+    if (message.type === 'state' && !isAllowedAssetServerUrl(message.assetServerUrl)) {
+      this.rejectConnectedMessage(ws, 'MCP server advertised a non-loopback asset URL')
+      return
+    }
+    if (
+      message.type === 'state' &&
+      this.assetServerUrl !== null &&
+      message.assetServerUrl !== this.assetServerUrl
+    ) {
+      this.rejectConnectedMessage(ws, 'MCP server changed its asset server URL')
+      return
+    }
+    this.handleHubMessage(message)
+  }
+
+  private rejectConnectedMessage(ws: WebSocket, message: string): void {
+    if (this.ws !== ws) return
+    this.errorMessage = message
+    this.emitSnapshot()
+    closeWebSocket(ws)
+  }
+
+  private handleHubMessage(message: MessageToExtension): void {
+    switch (message.type) {
+      case 'registered':
+        this.registeredId = message.id
+        break
+      case 'state':
+        this.activeId = message.activeId
+        this.assetServerUrl = message.assetServerUrl
+        this.status = 'connected'
+        this.errorMessage = null
+        this.emitSnapshot()
+        break
+      case 'toolCall':
+        this.events.onToolCall?.(message)
+        break
+      case 'designActionResult':
+        this.events.onDesignActionResult?.(message)
+        break
+      case 'designTaskState':
+        this.events.onDesignTask?.(message)
+        break
+    }
+  }
+
+  private handleClose(ws: WebSocket, event: CloseEvent): void {
+    if (this.ws !== ws) return
+    this.cleanupSocket()
+    this.activeId = null
+    this.assetServerUrl = null
+    this.registeredId = null
+    this.status = 'connecting'
+    this.errorMessage = event.wasClean ? null : 'MCP connection closed unexpectedly'
+    this.emitSnapshot()
+    this.scheduleReconnect()
+  }
+
+  private handleError(ws: WebSocket, event: Event): void {
+    if (this.ws !== ws) return
+    this.errorMessage = getErrorEventMessage(event) ?? 'MCP connection error'
+    this.emitSnapshot()
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.enabled || this.reconnectTimer) return
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.ensureConnected()
+    }, RECONNECT_DELAY_MS)
+  }
+
+  private clearReconnectTimer(): void {
+    if (!this.reconnectTimer) return
+    clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+  }
+
+  private startKeepalive(): void {
+    this.clearKeepaliveTimer()
+    this.keepaliveTimer = setInterval(() => {
+      this.sendJson({ type: 'ping' })
+    }, KEEPALIVE_INTERVAL_MS)
+  }
+
+  private clearKeepaliveTimer(): void {
+    if (!this.keepaliveTimer) return
+    clearInterval(this.keepaliveTimer)
+    this.keepaliveTimer = null
+  }
+
+  private cleanupSocket(): void {
+    this.clearKeepaliveTimer()
+    const candidate = this.candidateSocket
+    const current = this.ws
+    this.candidateSocket = null
+    this.ws = null
+    closeWebSocket(candidate)
+    closeWebSocket(current)
+  }
+
+  private sendJson(payload: unknown): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify(payload))
+  }
+
+  private emitSnapshot(): void {
+    this.events.onSnapshot?.(this.getSnapshot())
+  }
+}
+
+function parseHubMessage(event: Event): MessageToExtension | null {
+  const data = (event as MessageEvent<unknown>).data
+  return parseMessageToExtension(typeof data === 'string' ? data : '')
+}
+
+/**
+ * Only reached when a frame fails validation: a Hub older than this negotiation announces no
+ * version at all, and that deserves the mismatch diagnostic rather than "malformed".
+ */
+function isRegistrationFrame(event: Event): boolean {
+  const data = (event as MessageEvent<unknown>).data
+  if (typeof data !== 'string') return false
+  try {
+    const value: unknown = JSON.parse(data)
+    return (
+      typeof value === 'object' && value !== null && 'type' in value && value.type === 'registered'
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A newer Hub may still serve this extension's protocol. Accept that, so a Hub release never has to
+ * wait for store review; refuse only when the Hub no longer speaks this version at all.
+ */
+function servesThisExtension({
+  protocolVersion,
+  supportedProtocolVersions = []
+}: RegisteredMessage): boolean {
+  return (
+    protocolVersion === TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION ||
+    supportedProtocolVersions.includes(TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION)
+  )
+}
+
+function createProtocolMismatchError(
+  registration?: RegisteredMessage
+): McpBridgeProtocolMismatchError {
+  const received = registration ? String(registration.protocolVersion) : 'missing or invalid'
+  const serves = registration?.supportedProtocolVersions?.length
+    ? ` It serves ${registration.supportedProtocolVersions.join(', ')}.`
+    : ''
+  return new McpBridgeProtocolMismatchError(
+    `Design Bridge protocol mismatch: the extension requires ${TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION}, ` +
+      `but the MCP server reported ${received}.${serves} ` +
+      'Restart the agent and its Design Bridge MCP connection using the matching internal release. ' +
+      'If an older agent is still keeping the MCP server running, close that agent too before restarting. ' +
+      'If the mismatch persists, update the extension and reload Figma. Reloading Figma alone does not update the MCP server.'
+  )
+}
+
+function closeWebSocket(ws: WebSocket | null): void {
+  try {
+    ws?.close()
+  } catch {
+    // Socket teardown is best effort.
+  }
+}
+
+async function probeLocalHubPort(port: number): Promise<boolean> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), PORT_PROBE_TIMEOUT_MS)
+  try {
+    await fetch(`http://127.0.0.1:${port}/`, {
+      cache: 'no-store',
+      signal: controller.signal
+    })
+    return true
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function getErrorEventMessage(event: Event): string | null {
+  if (
+    typeof ErrorEvent !== 'undefined' &&
+    event instanceof ErrorEvent &&
+    typeof event.message === 'string' &&
+    event.message
+  ) {
+    return event.message
+  }
+  return null
+}
+
+function isAllowedAssetServerUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (
+      url.protocol === 'http:' &&
+      url.hostname === '127.0.0.1' &&
+      url.port !== '' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      url.hash === ''
+    )
+  } catch {
+    return false
+  }
+}

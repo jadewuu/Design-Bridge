@@ -1,0 +1,37 @@
+import type { FigmaSessionsMessage } from '@tempad-dev/shared'
+import type { WebSocket } from 'ws'
+
+export interface ExtensionConnection {
+  id: string
+  ws: WebSocket
+  origin: string
+  connectedAt: string
+  // Only an explicitly negotiated legacy connection bypasses session/runtime routing.
+  legacy?: boolean
+  sessions?: FigmaSessionsMessage
+  runtime?: {
+    version: string
+    fingerprint: string
+  }
+}
+
+export interface PendingToolCall {
+  resolve: (value: unknown) => void
+  reject: (reason?: Error) => void
+  timer: NodeJS.Timeout
+  extensionId: string
+}
+
+export interface AssetRecord {
+  hash: string
+  filePath: string
+  mimeType: string
+  size: number
+  uploadedAt: number
+  lastAccess: number
+  metadata?: {
+    width?: number
+    height?: number
+    themeable?: boolean
+  }
+}

@@ -1,0 +1,179 @@
+import { isRenderablePaint } from '@/utils/figma-paint'
+
+import type { GetCodeCacheContext } from '../cache'
+import type { NodeSnapshot, VisibleTree } from '../model'
+
+import { getNodeSemanticsCached, hasVisibleEffects } from '../cache'
+import { addSubtreeIds } from '../tree'
+
+export type AssetPlan = {
+  vectorRoots: Set<string>
+  skippedIds: Set<string>
+}
+
+type VectorInfo = {
+  allNonMaskVectorLike: boolean
+  nonMaskLeafCount: number
+  hasMask: boolean
+}
+
+const VECTOR_LIKE_LEAF_TYPES = new Set<SceneNode['type']>([
+  'VECTOR',
+  'BOOLEAN_OPERATION',
+  'STAR',
+  'LINE',
+  'ELLIPSE',
+  'POLYGON',
+  'RECTANGLE'
+])
+
+export function planAssets(
+  tree: VisibleTree,
+  ignoredIds?: Set<string>,
+  ctx?: GetCodeCacheContext
+): AssetPlan {
+  const vectorRoots = new Set<string>()
+  const skipped = new Set<string>()
+  const vectorInfo = computeVectorInfo(tree, ignoredIds, ctx)
+
+  for (const id of tree.order) {
+    if (ignoredIds?.has(id)) continue
+    if (skipped.has(id)) continue
+    const node = tree.nodes.get(id)
+    if (!node) continue
+
+    const children = node.children
+      .map((childId) => tree.nodes.get(childId))
+      .filter((child): child is NodeSnapshot => !!child && !ignoredIds?.has(child.id))
+
+    const info = vectorInfo.get(id)
+    const isVectorGroup =
+      !!info &&
+      isEligibleContainer(node) &&
+      info.allNonMaskVectorLike &&
+      info.nonMaskLeafCount >= 1 &&
+      !hasOwnBoxSemantics(node, ctx) &&
+      !hasDesignComponentHint(node) &&
+      (hasSingleArtworkChild(children) || info.hasMask || info.nonMaskLeafCount > 1)
+
+    if (isVectorGroup) {
+      vectorRoots.add(id)
+      children.forEach((child) => addSubtreeIds(child.id, tree, skipped))
+      continue
+    }
+
+    if (node.assetKind === 'vector') {
+      vectorRoots.add(id)
+    }
+  }
+
+  return { vectorRoots, skippedIds: skipped }
+}
+
+function computeVectorInfo(
+  tree: VisibleTree,
+  ignoredIds?: Set<string>,
+  ctx?: GetCodeCacheContext
+): Map<string, VectorInfo> {
+  const info = new Map<string, VectorInfo>()
+
+  for (const id of [...tree.order].reverse()) {
+    if (ignoredIds?.has(id)) continue
+    const node = tree.nodes.get(id)
+    if (!node) continue
+
+    if (!node.children.length) {
+      if (isMaskNode(node, ctx)) {
+        info.set(id, {
+          allNonMaskVectorLike: true,
+          nonMaskLeafCount: 0,
+          hasMask: true
+        })
+        continue
+      }
+
+      const isVectorLike = isVectorLikeLeaf(node)
+      info.set(id, {
+        allNonMaskVectorLike: isVectorLike,
+        nonMaskLeafCount: isVectorLike ? 1 : 0,
+        hasMask: false
+      })
+      continue
+    }
+
+    let allNonMaskVectorLike = true
+    let nonMaskLeafCount = 0
+    let hasMask = isMaskNode(node, ctx)
+    for (const childId of node.children) {
+      if (ignoredIds?.has(childId)) {
+        allNonMaskVectorLike = false
+        continue
+      }
+      const childInfo = info.get(childId)
+      if (!childInfo || !childInfo.allNonMaskVectorLike) {
+        allNonMaskVectorLike = false
+      }
+      if (childInfo) {
+        nonMaskLeafCount += childInfo.nonMaskLeafCount
+        if (childInfo.hasMask) hasMask = true
+      }
+    }
+    info.set(id, { allNonMaskVectorLike, nonMaskLeafCount, hasMask })
+  }
+
+  return info
+}
+
+function isEligibleContainer(node: NodeSnapshot): boolean {
+  return node.type === 'GROUP' || node.type === 'FRAME'
+}
+
+function hasSingleArtworkChild(children: NodeSnapshot[]): boolean {
+  return children.length === 1
+}
+
+function hasDesignComponentHint(node: NodeSnapshot): boolean {
+  return Boolean(node.dataHint?.['data-hint-design-component']?.trim())
+}
+
+function hasOwnBoxSemantics(snapshot: NodeSnapshot, ctx?: GetCodeCacheContext): boolean {
+  if (ctx) {
+    const semantics = getNodeSemanticsCached(snapshot.node, ctx)
+    return (
+      semantics.paint.hasVisibleFill ||
+      semantics.paint.hasVisibleStroke ||
+      semantics.paint.hasVisibleEffect ||
+      semantics.layout.clipsContent
+    )
+  }
+
+  return (
+    hasVisiblePaints(snapshot.node, 'fills') ||
+    hasVisiblePaints(snapshot.node, 'strokes') ||
+    hasVisibleEffects(snapshot.node) ||
+    hasClipping(snapshot.node)
+  )
+}
+
+function isMaskNode(snapshot: NodeSnapshot, ctx?: GetCodeCacheContext): boolean {
+  if (ctx) return getNodeSemanticsCached(snapshot.node, ctx).layout.isMask
+  const node = snapshot.node as { isMask?: boolean }
+  return node.isMask === true
+}
+
+function isVectorLikeLeaf(snapshot: NodeSnapshot): boolean {
+  if (snapshot.assetKind === 'image') return false
+  if (snapshot.assetKind === 'vector') return true
+  return VECTOR_LIKE_LEAF_TYPES.has(snapshot.type)
+}
+
+function hasVisiblePaints(node: SceneNode, kind: 'fills' | 'strokes'): boolean {
+  if (!(kind in node)) return false
+  const paints = (node as { fills?: unknown; strokes?: unknown })[kind]
+  if (!Array.isArray(paints)) return false
+  return paints.some((paint) => isRenderablePaint(paint))
+}
+
+function hasClipping(node: SceneNode): boolean {
+  return 'clipsContent' in node && node.clipsContent === true
+}

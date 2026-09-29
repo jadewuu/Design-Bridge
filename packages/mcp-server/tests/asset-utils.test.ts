@@ -1,0 +1,46 @@
+import { describe, expect, it } from 'vitest'
+
+import {
+  buildAssetFilename,
+  getHashFromAssetFilename,
+  getImageExtension,
+  normalizeMimeType
+} from '../src/asset-utils'
+
+describe('asset-utils', () => {
+  it('normalizes mime types with params and casing', () => {
+    expect(normalizeMimeType('IMAGE/PNG; charset=UTF-8')).toBe('image/png')
+    expect(normalizeMimeType('  text/plain  ')).toBe('text/plain')
+    expect(normalizeMimeType(undefined)).toBe('application/octet-stream')
+    expect(normalizeMimeType('')).toBe('application/octet-stream')
+    expect(normalizeMimeType(' ;bad')).toBe('')
+    expect(normalizeMimeType('; charset=UTF-8')).toBe('application/octet-stream')
+  })
+
+  it('derives image extensions with override and suffix handling', () => {
+    expect(getImageExtension('image/jpeg')).toBe('.jpg')
+    expect(getImageExtension('image/svg+xml')).toBe('.svg')
+    expect(getImageExtension('image/+xml')).toBe('')
+    expect(getImageExtension('image/png')).toBe('.png')
+    expect(getImageExtension('text/plain')).toBe('')
+    expect(getImageExtension('image/')).toBe('')
+  })
+
+  it('rejects unsafe image extensions derived from subtype', () => {
+    expect(getImageExtension('image/../../../../.ssh/authorized_keys')).toBe('')
+    expect(getImageExtension('image\\png')).toBe('')
+  })
+
+  it('builds asset filenames and parses hashes', () => {
+    const hash = 'a1b2c3d4'.repeat(8)
+    expect(buildAssetFilename(hash, 'image/png')).toBe(`${hash}.png`)
+    expect(buildAssetFilename(hash, 'application/octet-stream')).toBe(hash)
+
+    expect(getHashFromAssetFilename(hash)).toBe(hash)
+    expect(getHashFromAssetFilename(`${hash}.jpg`)).toBe(hash)
+    expect(getHashFromAssetFilename('a1b2c3d4.png')).toBe('a1b2c3d4')
+    expect(getHashFromAssetFilename(`${hash.toUpperCase()}.JPG`)).toBeNull()
+    expect(getHashFromAssetFilename('too-short.png')).toBeNull()
+    expect(getHashFromAssetFilename(`${hash}.bad-ext!`)).toBeNull()
+  })
+})

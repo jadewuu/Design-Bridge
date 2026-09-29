@@ -1,0 +1,28 @@
+export type PaintList = Paint[] | ReadonlyArray<Paint> | null | undefined
+export type PaintVariableBindings = ReadonlyArray<unknown> | null | undefined
+
+export type FigmaLookupReaders = {
+  getStyleById(id: string): BaseStyle | null
+  getVariableById(id: string): Variable | null
+  getRangeBoundVariable?(
+    node: TextNode,
+    start: number,
+    end: number,
+    field: VariableBindableTextField
+  ): ReturnType<TextNode['getRangeBoundVariable']>
+}
+
+export type PaintResolutionSize = {
+  width: number
+  height: number
+}
+
+export type NodePaintStyleInput = {
+  fillStyleId?: unknown
+  strokeStyleId?: unknown
+  fills?: PaintList
+  strokes?: PaintList
+  fillVariableBindings?: PaintVariableBindings
+  strokeVariableBindings?: PaintVariableBindings
+  dimensions?: PaintResolutionSize
+}

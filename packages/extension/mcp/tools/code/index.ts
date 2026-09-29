@@ -1,0 +1,806 @@
+import type {
+  AssetDescriptor,
+  GetCodeParametersInput,
+  GetCodeResult,
+  GetTokenDefsResult
+} from '@tempad-dev/shared'
+
+import { MCP_TOOL_INLINE_BUDGET_BYTES, buildGetCodeToolResult } from '@tempad-dev/shared'
+
+import type { DevComponent } from '@/types/plugin'
+import type { CodegenConfig } from '@/utils/codegen'
+
+import { activePlugin } from '@/ui/state'
+import { stringifyComponent } from '@/utils/component'
+import { simplifyColorMixToRgba } from '@/utils/css'
+import { logger } from '@/utils/log'
+
+import type { SvgEntry } from './assets'
+import type { VisibleTree } from './model'
+import type { CodeLanguage, RenderContext } from './render'
+import type { PluginComponent } from './render/plugin'
+
+import { currentCodegenConfig } from '../config'
+import { collectCandidateVariableIds } from '../token/candidates'
+import { exportVectorAssets } from './assets/export'
+import { planAssets } from './assets/plan'
+import { preflightGetCodeBudget } from './budget-preflight'
+import { createGetCodeCacheContext } from './cache'
+import { collectNodeData } from './collect'
+import { collectUnboundColorLiteralClusters } from './literal-clusters'
+import {
+  CodeBudgetExceededError,
+  assertToolResponseWithinBudget,
+  buildGetCodeWarnings
+} from './messages'
+import { getOrderedChildIds, renderShellTree, renderTree } from './render'
+import { resolvePluginComponents } from './render/plugin'
+import { buildLayoutStyles, prepareStyles } from './styles'
+import { createStyleVarResolver, processTokens, resolveStyleMap } from './tokens'
+import { addSubtreeIds, buildVisibleTree } from './tree'
+
+// Tags that should render children without extra whitespace/newlines.
+const COMPACT_TAGS = new Set([
+  'a',
+  'span',
+  'b',
+  'strong',
+  'i',
+  'em',
+  'u',
+  's',
+  'strike',
+  'code',
+  'br',
+  'wbr',
+  'small',
+  'sub',
+  'sup',
+  'label',
+  'time',
+  'p',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'li',
+  'dt',
+  'dd',
+  'th',
+  'td',
+  'caption',
+  'figcaption',
+  'summary'
+])
+
+type TraceInfo = {
+  now: () => number
+  stamp: (label: string, start: number) => void
+}
+
+type CollectedContext = {
+  styles: Map<string, Record<string, string>>
+  textSegments: Map<string, StyledTextSegment[] | null>
+}
+
+type RenderMode =
+  | { kind: 'full' }
+  | {
+      kind: 'shell'
+      omittedNodeIds: string[]
+    }
+
+type ShellMode = Extract<RenderMode, { kind: 'shell' }>
+
+type PipelineInput = {
+  mode: RenderMode
+  rootId: string
+  tree: VisibleTree
+  ctx: RenderContext
+  collected: CollectedContext
+  vectorRoots: Set<string>
+  rootTag?: string
+  lang?: CodeLanguage
+  variableIds: Set<string>
+  usedCandidateIds: Set<string>
+  variableCache: Map<string, Variable | null>
+  resolveTokens?: boolean
+  trace?: TraceInfo
+}
+
+type PipelineOutput = {
+  code: string
+  lang: CodeLanguage
+  tokens?: GetTokenDefsResult
+}
+
+export type GetCodeRuntimeOptions = {
+  unbounded?: boolean
+}
+
+type RenderStep = 'render' | 'stringify' | 'transform'
+
+export async function handleGetCode(
+  nodes: SceneNode[],
+  preferredLang?: CodeLanguage,
+  resolveTokens?: boolean,
+  vectorMode: GetCodeParametersInput['vectorMode'] = 'smart',
+  runtimeOptions: GetCodeRuntimeOptions = {}
+): Promise<GetCodeResult> {
+  const measure = typeof __DEV__ !== 'undefined' && __DEV__
+  const trace = measure ? createTrace() : undefined
+  const now = trace?.now ?? (() => 0)
+  const stamp = trace?.stamp ?? (() => {})
+  const traceInfo: TraceInfo | undefined = trace ? { now, stamp } : undefined
+
+  const [node] = nodes
+  if (nodes.length !== 1 || !node) {
+    throw new Error('Select exactly one node or provide a single root node id.')
+  }
+
+  if (!node.visible) {
+    throw new Error('The selected node is not visible.')
+  }
+
+  let t = now()
+  const tree = buildVisibleTree(nodes)
+  stamp('tree', t)
+  const rootId = tree.rootIds[0]
+  if (!rootId) {
+    throw new Error('No renderable nodes found for the current selection.')
+  }
+  if (tree.stats.capped) {
+    const depth = tree.stats.depthLimit ?? tree.stats.maxDepth
+    logger.warn(`[get_code] Tree depth capped at ${depth}; output may be incomplete.`)
+  }
+
+  const config = currentCodegenConfig()
+  const pluginCode = activePlugin.value?.code
+  const maxResultBytes = runtimeOptions.unbounded
+    ? Number.MAX_SAFE_INTEGER
+    : MCP_TOOL_INLINE_BUDGET_BYTES
+  const budgetPreflight = preflightGetCodeBudget(tree, rootId, {
+    maxResultBytes,
+    pluginEnabled: !!pluginCode,
+    unbounded: !!runtimeOptions.unbounded
+  })
+  const earlyShell = budgetPreflight.kind === 'shell'
+
+  t = now()
+  const variableCache = new Map<string, Variable | null>()
+  const cache = createGetCodeCacheContext(variableCache, { metrics: measure })
+  const nodeVariableIds = new Map<string, ReadonlySet<string>>()
+  const mappings = collectCandidateVariableIds(nodes, variableCache, cache.readers, {
+    traverseChildren: !earlyShell,
+    captureNodeId: (id) => tree.nodes.has(id),
+    onNodeVariableIds: (id, ids) => nodeVariableIds.set(id, ids)
+  })
+  stamp('vars', t)
+
+  const { pluginComponents, pluginSkipped } =
+    pluginCode && !earlyShell
+      ? await collectPluginOutput(tree, config, pluginCode, preferredLang)
+      : { pluginComponents: undefined, pluginSkipped: new Set<string>() }
+
+  t = now()
+  const plan = earlyShell
+    ? { vectorRoots: new Set<string>(), skippedIds: new Set<string>() }
+    : planAssets(tree, pluginSkipped, cache)
+  stamp('plan-assets', t)
+
+  const assetRegistry = new Map<string, AssetDescriptor>()
+  const skipIds = earlyShell
+    ? new Set(tree.order.filter((id) => id !== rootId))
+    : buildSkipIds(plan.skippedIds, pluginSkipped)
+  t = now()
+  const collected = await collectNodeData(
+    tree,
+    config,
+    assetRegistry,
+    cache,
+    skipIds,
+    nodeVariableIds
+  )
+  stamp('collect', t)
+
+  if (earlyShell) {
+    ensureEarlyShellRootPositioning(rootId, tree, collected.styles)
+  }
+
+  const { usedCandidateIds, layout: layoutStyles } = prepareStyles({
+    tree,
+    styles: collected.styles,
+    mappings,
+    variableCache,
+    vectorRoots: plan.vectorRoots,
+    cache,
+    trace: traceInfo
+  })
+
+  t = now()
+  const svgs = earlyShell
+    ? new Map<string, SvgEntry>()
+    : await exportVectorAssets(tree, plan, config, assetRegistry, vectorMode, cache)
+  stamp('export-assets', t)
+
+  const nodeMap = buildNodeMap(collected.nodes)
+  const ctx: RenderContext = {
+    styles: collected.styles,
+    layout: layoutStyles,
+    nodes: nodeMap,
+    svgs,
+    textSegments: collected.textSegments,
+    pluginComponents,
+    pluginCode,
+    config,
+    readers: cache.readers,
+    preferredLang
+  }
+
+  const rootTag = collected.nodes.get(rootId)?.tag
+  const codegen = {
+    plugin: activePlugin.value?.name ?? 'none',
+    config
+  }
+  const baseInput: Omit<PipelineInput, 'mode'> = {
+    rootId,
+    tree,
+    ctx,
+    collected,
+    vectorRoots: plan.vectorRoots,
+    rootTag,
+    lang: preferredLang,
+    variableIds: mappings.variableIds,
+    usedCandidateIds,
+    variableCache,
+    resolveTokens,
+    trace: traceInfo
+  }
+  const allAssets = Array.from(assetRegistry.values())
+  const { rootVideoPreviewAssetHashes, videoPreviewAssetHashes } = collected
+
+  if (earlyShell) {
+    const shellMode = createShellMode(rootId, tree, ctx)
+    const shell = shellMode
+      ? await tryRenderShell({
+          ...baseInput,
+          mode: shellMode
+        })
+      : null
+    if (!shell) {
+      throw new Error('Unable to build an early shell for the oversized selection.')
+    }
+
+    const warnings = buildGetCodeWarnings(shell.code, {
+      depthCapped: tree.stats.capped,
+      shell: true
+    })
+    const assets = selectAssetsForCode(allAssets, shell.code, videoPreviewAssetHashes)
+    const result = buildCodeResult(shell, codegen, assets, undefined, warnings)
+    assertToolResponseWithinBudget(buildGetCodeToolResult(result), maxResultBytes)
+    if (trace) {
+      logTrace(
+        trace,
+        `nodes=${tree.order.length} collected=1 assets=${assets.length} shell=early preflightNodes=${budgetPreflight.scannedDescendants}${formatCacheMetrics(cache)}`
+      )
+    }
+    return result
+  }
+
+  try {
+    const output = await renderPipeline({
+      ...baseInput,
+      mode: { kind: 'full' }
+    })
+    const literalClusters = resolveTokens
+      ? undefined
+      : collectUnboundColorLiteralClusters(collected.styles, tree)
+    const warnings = buildGetCodeWarnings(output.code, {
+      depthCapped: tree.stats.capped,
+      literalClusters
+    })
+    const assets = selectAssetsForCode(allAssets, output.code, videoPreviewAssetHashes)
+    const result = buildCodeResult(output, codegen, assets, literalClusters, warnings)
+    assertToolResponseWithinBudget(buildGetCodeToolResult(result), maxResultBytes)
+
+    if (trace) {
+      logTrace(
+        trace,
+        `nodes=${tree.order.length} text=${collected.textSegments.size} vectors=${plan.vectorRoots.size} assets=${assets.length}${runtimeOptions.unbounded ? ' budget=unbounded' : ''}${formatCacheMetrics(cache)}`
+      )
+    }
+
+    return result
+  } catch (error) {
+    if (!(error instanceof CodeBudgetExceededError)) {
+      throw error
+    }
+
+    const shellMode = createShellMode(rootId, tree, ctx)
+    if (!shellMode) {
+      throw error
+    }
+
+    const shell = await tryRenderShell({
+      ...baseInput,
+      mode: shellMode
+    })
+    if (shell == null) {
+      throw error
+    }
+
+    const warnings = buildGetCodeWarnings(shell.code, {
+      depthCapped: tree.stats.capped,
+      shell: true
+    })
+    const assets = selectAssetsForCode(allAssets, shell.code, rootVideoPreviewAssetHashes)
+    const result = buildCodeResult(shell, codegen, assets, undefined, warnings)
+
+    try {
+      assertToolResponseWithinBudget(buildGetCodeToolResult(result), maxResultBytes)
+    } catch (shellError) {
+      if (shellError instanceof CodeBudgetExceededError) {
+        throw error
+      }
+      throw shellError
+    }
+
+    if (trace) {
+      logTrace(
+        trace,
+        `nodes=${tree.order.length} text=${collected.textSegments.size} vectors=${plan.vectorRoots.size} assets=${assets.length} shell${formatCacheMetrics(cache)}`
+      )
+    }
+
+    return result
+  }
+}
+
+function ensureEarlyShellRootPositioning(
+  rootId: string,
+  tree: VisibleTree,
+  styles: Map<string, Record<string, string>>
+): void {
+  const root = tree.nodes.get(rootId)
+  if (!root?.children.length) return
+  if (root.node.type === 'GROUP' || root.node.type === 'BOOLEAN_OPERATION') return
+  const style = styles.get(rootId)
+  if (!style || (style.position && style.position !== 'static')) return
+  styles.set(rootId, { ...style, position: 'relative' })
+}
+
+async function tryRenderShell(input: PipelineInput): Promise<PipelineOutput | null> {
+  const rendered = await renderMarkup(input)
+  if (!rendered) {
+    return null
+  }
+  return finalizeRenderedOutput(input, rendered)
+}
+
+function createShellMode(rootId: string, tree: VisibleTree, ctx: RenderContext): ShellMode | null {
+  const rootSnapshot = tree.nodes.get(rootId)
+  if (!rootSnapshot?.children.length) return null
+
+  const omittedNodeIds = getOrderedChildIds(rootSnapshot, ctx.styles.get(rootId) ?? {}, tree)
+  if (!omittedNodeIds.length) return null
+
+  return {
+    kind: 'shell',
+    omittedNodeIds
+  }
+}
+
+async function renderPipeline(input: PipelineInput): Promise<PipelineOutput> {
+  const rendered = await renderMarkup(input)
+  if (!rendered) {
+    throw new Error('Unable to build markup for the current selection.')
+  }
+
+  return finalizeRenderedOutput(input, rendered)
+}
+
+async function finalizeRenderedOutput(
+  input: PipelineInput,
+  rendered: { code: string; lang: CodeLanguage }
+): Promise<PipelineOutput> {
+  const collected = getTokenCollectedContext(input)
+  const {
+    code: rewrittenCode,
+    tokensByCanonical,
+    sourceIndex,
+    tokenMatcher,
+    resolveNodeIds
+  } = await processTokens({
+    code: rendered.code,
+    variableIds: input.variableIds,
+    usedCandidateIds: input.usedCandidateIds,
+    variableCache: input.variableCache,
+    styles: collected.styles,
+    textSegments: collected.textSegments,
+    svgs: input.ctx.svgs,
+    config: input.ctx.config,
+    pluginCode: input.ctx.pluginCode,
+    resolveTokens: input.resolveTokens,
+    stamp: input.trace?.stamp,
+    now: input.trace?.now
+  })
+
+  let outputCode = rewrittenCode
+
+  if (input.resolveTokens && Object.keys(tokensByCanonical).length) {
+    const now = input.trace?.now
+    const stamp = input.trace?.stamp
+    const t = now ? now() : 0
+    const hasTargetNodes = resolveNodeIds ? resolveNodeIds.size > 0 : true
+    if (hasTargetNodes) {
+      const resolved = await rerenderResolvedOutput({
+        ...input,
+        collected,
+        lang: rendered.lang,
+        sourceIndex,
+        resolveNodeIds,
+        tokenMatcher
+      })
+      if (resolved) {
+        outputCode = resolved.code
+      }
+    }
+    if (stamp && now) {
+      stamp('tokens:resolve', t)
+    }
+  }
+
+  const tokensPayload = Object.keys(tokensByCanonical).length ? tokensByCanonical : undefined
+  return {
+    lang: rendered.lang,
+    code: outputCode,
+    ...(tokensPayload ? { tokens: tokensPayload } : {})
+  }
+}
+
+function getTokenCollectedContext(input: PipelineInput): CollectedContext {
+  if (input.mode.kind !== 'shell') {
+    return input.collected
+  }
+
+  const styles = new Map<string, Record<string, string>>()
+  const rootStyle = input.collected.styles.get(input.rootId)
+  if (rootStyle) {
+    styles.set(input.rootId, rootStyle)
+  }
+
+  const textSegments = new Map<string, StyledTextSegment[] | null>()
+  const rootSegments = input.collected.textSegments.get(input.rootId)
+  if (rootSegments !== undefined) {
+    textSegments.set(input.rootId, rootSegments)
+  }
+
+  return { styles, textSegments }
+}
+
+async function rerenderResolvedOutput({
+  sourceIndex,
+  resolveNodeIds,
+  tokenMatcher,
+  ...input
+}: {
+  sourceIndex: Map<string, string>
+  resolveNodeIds?: Set<string>
+  tokenMatcher?: (value: string) => boolean
+} & PipelineInput & {
+    lang: CodeLanguage
+  }): Promise<{ code: string } | null> {
+  const resolveStyleVars = createStyleVarResolver(
+    sourceIndex,
+    input.variableCache,
+    input.ctx.config,
+    resolveNodeIds,
+    tokenMatcher
+  )
+  const resolvedStyles = resolveStyleMap(input.collected.styles, input.ctx.nodes, resolveStyleVars)
+  const resolvedSvgs = resolveSvgEntries(input.ctx.svgs, input.ctx.nodes, resolveStyleVars)
+  if (
+    !resolvedEntriesChanged(input.collected.styles, resolvedStyles) &&
+    !resolvedEntriesChanged(input.ctx.svgs, resolvedSvgs)
+  ) {
+    return null
+  }
+  const resolvedLayout = buildLayoutStyles(resolvedStyles, input.vectorRoots)
+  const resolvedCtx: RenderContext = {
+    ...input.ctx,
+    // Each render detects its language independently; keep the first result language below.
+    detectedLang: undefined,
+    styles: resolvedStyles,
+    layout: resolvedLayout,
+    svgs: resolvedSvgs,
+    resolveStyleVars
+  }
+
+  return renderMarkup({
+    ...input,
+    ctx: resolvedCtx,
+    lang: input.lang,
+    transform: simplifyColorMixToRgba
+  })
+}
+
+function resolvedEntriesChanged<T>(original: Map<string, T>, resolved: Map<string, T>): boolean {
+  if (original === resolved) return false
+  for (const [id, value] of resolved) {
+    if (value !== original.get(id)) return true
+  }
+  return false
+}
+
+function resolveSvgEntries(
+  svgs: Map<string, SvgEntry>,
+  nodes: Map<string, SceneNode>,
+  resolver: (style: Record<string, string>, node?: SceneNode) => Record<string, string>
+): Map<string, SvgEntry> {
+  const out = new Map<string, SvgEntry>()
+
+  for (const [id, entry] of svgs.entries()) {
+    const presentationStyle = entry.presentationStyle
+    if (!presentationStyle || !Object.keys(presentationStyle).length) {
+      out.set(id, entry)
+      continue
+    }
+
+    const resolvedPresentationStyle = resolver(presentationStyle, nodes.get(id))
+    if (resolvedPresentationStyle === presentationStyle) {
+      out.set(id, entry)
+      continue
+    }
+
+    out.set(id, {
+      ...entry,
+      presentationStyle: resolvedPresentationStyle
+    })
+  }
+
+  return out
+}
+
+async function collectPluginOutput(
+  tree: VisibleTree,
+  config: CodegenConfig,
+  pluginCode: string,
+  preferredLang?: CodeLanguage
+): Promise<{
+  pluginComponents: Map<string, PluginComponent | null>
+  pluginSkipped: Set<string>
+}> {
+  const pluginComponents = new Map<string, PluginComponent | null>()
+  const instances: Array<{ id: string; node: InstanceNode }> = []
+  for (const id of tree.order) {
+    const snapshot = tree.nodes.get(id)
+    if (snapshot?.node.type === 'INSTANCE') {
+      instances.push({ id: snapshot.id, node: snapshot.node })
+    }
+  }
+
+  const components = await resolvePluginComponents(
+    instances.map(({ node }) => node),
+    config,
+    pluginCode,
+    preferredLang
+  )
+  instances.forEach(({ id }, resultIndex) => {
+    pluginComponents.set(id, components[resultIndex] ?? null)
+  })
+  const pluginSkipped = new Set<string>()
+
+  if (pluginComponents.size) {
+    for (const [id, component] of pluginComponents.entries()) {
+      if (!component) continue
+      const snapshot = tree.nodes.get(id)
+      if (!snapshot) continue
+      snapshot.children.forEach((childId) => addSubtreeIds(childId, tree, pluginSkipped))
+    }
+  }
+
+  return { pluginComponents, pluginSkipped }
+}
+
+function buildSkipIds(base: Set<string>, extra: Set<string>): Set<string> {
+  if (!extra.size) return base
+  if (!base.size) return extra
+  return new Set<string>([...base, ...extra])
+}
+
+function buildNodeMap(nodes: Map<string, { node: SceneNode }>): Map<string, SceneNode> {
+  const out = new Map<string, SceneNode>()
+  nodes.forEach((snap, id) => out.set(id, snap.node))
+  return out
+}
+
+function normalizeRootString(
+  content: string,
+  fallbackTag: string | undefined,
+  nodeId: string,
+  lang: CodeLanguage
+) {
+  return stringifyComponent(
+    {
+      name: fallbackTag || 'div',
+      props: { 'data-hint-id': nodeId },
+      children: [content]
+    },
+    createStringifyOptions(lang)
+  )
+}
+
+function stringifyComponentTree(
+  component: DevComponent | string,
+  rootTag: string | undefined,
+  nodeId: string,
+  lang: CodeLanguage
+) {
+  if (typeof component === 'string') {
+    return normalizeRootString(component, rootTag, nodeId, lang)
+  }
+  return stringifyComponent(component, createStringifyOptions(lang))
+}
+
+async function renderMarkup({
+  mode,
+  rootId,
+  tree,
+  ctx,
+  rootTag,
+  lang,
+  transform,
+  trace
+}: PipelineInput & {
+  transform?: (markup: string) => string
+}): Promise<{ code: string; lang: CodeLanguage } | null> {
+  const clock = trace?.now
+  let t = clock ? clock() : 0
+  const rendered = await renderTreeForMode(mode, rootId, tree, ctx)
+  if (!rendered) {
+    return null
+  }
+  stampRenderPhase(trace, mode, 'render', t)
+
+  const resolvedLang = lang ?? ctx.detectedLang ?? 'jsx'
+  t = clock ? clock() : 0
+  const markup = stringifyComponentTree(rendered, rootTag, rootId, resolvedLang)
+  stampRenderPhase(trace, mode, 'stringify', t)
+
+  t = clock ? clock() : 0
+  const output = transform ? transform(markup) : markup
+  stampRenderPhase(trace, mode, 'transform', t)
+  return { code: output, lang: resolvedLang }
+}
+
+function createStringifyOptions(lang: CodeLanguage): {
+  lang: CodeLanguage
+  isInline: (tag: string) => boolean
+} {
+  return {
+    lang,
+    isInline: isCompactTag
+  }
+}
+
+function isCompactTag(tag: string): boolean {
+  return COMPACT_TAGS.has(tag)
+}
+
+async function renderTreeForMode(
+  mode: RenderMode,
+  rootId: string,
+  tree: VisibleTree,
+  ctx: RenderContext
+): Promise<DevComponent | string | null> {
+  if (mode.kind === 'shell') {
+    return renderShellTree(rootId, tree, ctx, mode.omittedNodeIds)
+  }
+
+  return renderTree(rootId, tree, ctx)
+}
+
+function stampRenderPhase(
+  trace: TraceInfo | undefined,
+  mode: RenderMode,
+  step: RenderStep,
+  start: number
+): void {
+  if (!trace) {
+    return
+  }
+
+  const label = mode.kind === 'shell' ? `${step}:shell` : step
+  trace.stamp(label, start)
+}
+
+function selectAssetsForCode(
+  assets: AssetDescriptor[],
+  code: string,
+  supplementalAssetHashes?: ReadonlySet<string>
+): AssetDescriptor[] {
+  return assets.filter(
+    (asset) =>
+      code.includes(asset.url) ||
+      code.includes(asset.hash) ||
+      supplementalAssetHashes?.has(asset.hash)
+  )
+}
+
+function buildCodeResult(
+  output: PipelineOutput,
+  codegen: GetCodeResult['codegen'],
+  assets: AssetDescriptor[],
+  literalClusters?: GetCodeResult['literalClusters'],
+  warnings?: GetCodeResult['warnings']
+): GetCodeResult {
+  return {
+    lang: output.lang,
+    code: output.code,
+    ...(assets.length ? { assets } : {}),
+    ...(output.tokens ? { tokens: output.tokens } : {}),
+    ...(literalClusters?.length ? { literalClusters } : {}),
+    codegen,
+    ...(warnings?.length ? { warnings } : {})
+  }
+}
+
+function createTrace() {
+  const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  const startedAt = now()
+  const timings: Array<[string, number]> = []
+  const stamp = (label: string, start: number) => {
+    const elapsed = Math.round((now() - start) * 10) / 10
+    timings.push([label, elapsed])
+  }
+
+  return { now, startedAt, timings, stamp }
+}
+
+function logTrace(
+  trace: { now: () => number; startedAt: number; timings: Array<[string, number]> },
+  info: string
+) {
+  const elapsed = Math.round((trace.now() - trace.startedAt) * 10) / 10
+  logger.debug(`get_code total ${elapsed}ms`)
+  if (trace.timings.length) {
+    const detail = trace.timings.map(([label, ms]) => `${label}=${ms}ms`).join(' ')
+    logger.debug(`get_code timings ${detail} (${info})`)
+  }
+}
+
+function formatCacheMetrics(cache: { metrics?: { [key: string]: number } }): string {
+  if (!cache.metrics) return ''
+  const {
+    nodeSemanticHits,
+    nodeSemanticMisses,
+    styleHits,
+    styleMisses,
+    paintStyleHits,
+    paintStyleMisses,
+    variableHits,
+    variableMisses,
+    textRangeHits,
+    textRangeMisses,
+    vectorAnalysisHits,
+    vectorAnalysisMisses,
+    vectorExportCandidates,
+    vectorExportSkippedMissing,
+    vectorExportSkippedZeroBounds,
+    vectorExportNull,
+    vectorExportUploaded,
+    vectorExportThemeableInline,
+    vectorExportRawInline
+  } = cache.metrics
+  return [
+    `cache=node(${nodeSemanticHits}/${nodeSemanticMisses})`,
+    `style(${styleHits}/${styleMisses})`,
+    `paint-style(${paintStyleHits}/${paintStyleMisses})`,
+    `var(${variableHits}/${variableMisses})`,
+    `text-range(${textRangeHits}/${textRangeMisses})`,
+    `vector-analysis(${vectorAnalysisHits}/${vectorAnalysisMisses})`,
+    `vector-export(candidates=${vectorExportCandidates} missing=${vectorExportSkippedMissing} zero=${vectorExportSkippedZeroBounds} null=${vectorExportNull} uploaded=${vectorExportUploaded} themeable-inline=${vectorExportThemeableInline} raw-inline=${vectorExportRawInline})`
+  ].join(' ')
+}

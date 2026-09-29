@@ -1,0 +1,239 @@
+# MCP get_code - requirements
+
+This document records the requirements and hard constraints for the MCP `get_code` tool in `packages/extension/mcp/tools/code`.
+
+## Non-negotiables
+
+- Accept exactly one visible node; otherwise throw a user-facing error.
+- Never emit empty optional fields (`assets`, `tokens`, `literalClusters`, `warnings`).
+- Do not use `renderBounds` diffs for positioning.
+- Do not inject positioning containers on GROUP/BOOLEAN nodes.
+- Keep `getCSSAsync()` at most once per node.
+- Do not persist Figma-derived cache state across requests.
+- If a plugin returns component/code for an instance, do not collect or render its descendants.
+
+## Scope
+
+- Applies to MCP `get_code` only (not the UI codegen pipeline).
+- Output is markup + Tailwind classes + optional assets/tokens metadata.
+- UI codegen may intentionally prefer exact `WEB codeSyntax` and is allowed to differ from MCP output semantics.
+
+## Input constraints
+
+- Exactly one node is required.
+- The node must be visible.
+- `vectorMode` is optional:
+  - `smart` (default): emit `<svg data-src="...">` placeholders in code and preserve themeable instance color on the emitted `svg` root markup for downstream adaptation. If asset upload fails after export, inline the SVG as a fallback to preserve source of truth.
+  - `snapshot`: preserve vector assets for fidelity, even if a vector would otherwise be themeable.
+- Tree traversal is capped by a depth limit (semantic-tree driven). If capped, log a warning.
+- If depth is capped, emit a `depth-cap` warning telling agents to continue with narrower `get_code` calls using returned `data-hint-id` values.
+
+## Output contract (GetCodeResult)
+
+- Required fields:
+  - `lang`: resolved language for output markup.
+  - `code`: string markup.
+  - `codegen`: `{ plugin: string, config: CodegenConfig }`.
+- Optional fields (omit when empty):
+  - `assets`: array of exported assets (image/vector).
+  - `tokens`: one-layer map of token entries keyed by canonical token name.
+  - `literalClusters`: bounded repeated unbound color evidence for unresolved-token full responses.
+    Each entry carries a normalized literal, occurrence count, and sampled concrete consumer node
+    ids, names, and properties. Equal values are classification evidence, not proof that consumers
+    share one semantic variable.
+  - `warnings`: lightweight `type + message` guidance for inferred auto layout, depth-cap, repeated
+    unbound color evidence, or shell fallback.
+- SVG assets may include `themeable: true` when the vector can safely adopt a single contextual color channel.
+- Exact native-byte image assets include their current-file `figmaImageHash`. When any native bytes
+  are unavailable, the rendered-node fallback instead includes ordered unique
+  `figmaImageHashes` for every visible image fill.
+
+## Size and budget guard
+
+- Tool transport is still constrained by `MCP_MAX_PAYLOAD_BYTES`, but inline response budgeting is separate.
+- The default inline budget for `get_code` is `64 KiB`, measured on the final `CallToolResult` UTF-8 bytes.
+- If output exceeds the inline budget, prefer returning a shell response for the current node.
+- A shell response:
+  - preserves the current node wrapper/layout markup,
+  - omits all direct children for that node,
+  - lists omitted child ids in an inline code comment in render order,
+  - emits a lightweight `shell` warning that points agents to that inline comment.
+- Before variable scanning or collection, a bounded preflight sums descendant text in UTF-8 bytes.
+  When descendant text alone already exceeds the response budget, and no plugin/unbounded override
+  requires the full tree, `get_code` collects only the root and skips descendant variable mapping,
+  plugin resolution, asset planning/export, and full rendering.
+- Other overflow causes still use the correctness-first fallback after normal collection. The
+  preflight is deliberately a proof, not an output-size guess, so it must not discard work for trees
+  that may still fit.
+- Only throw a user-facing budget error when a usable shell cannot be generated.
+
+## Layout and positioning
+
+### Layout parent
+
+Figma `relativeTransform` is relative to the container parent, not to a GROUP/BOOLEAN parent. The layout parent is the nearest ancestor that is not `GROUP` or `BOOLEAN_OPERATION`.
+
+### Positioning rules
+
+- If parent has explicit `layoutMode` (auto layout):
+  - Children with `layoutPositioning === 'ABSOLUTE'` use absolute positioning.
+  - Other children stay in flow (flex layout).
+- If parent has inferred auto layout:
+  - Treat it as a layout parent (see “Inferred auto layout”).
+  - Do not apply constraint-based absolute positioning for its children.
+- If parent has no auto layout:
+  - Compute absolute positioning from `constraints` + `relativeTransform`.
+
+### Flex/grid sibling ordering
+
+- When a node renders as `flex/inline-flex` or `grid/inline-grid`, sibling order is meaningful.
+- Siblings are sorted by position using `absoluteBoundingBox` only:
+  - Flex: sort by primary axis (`x` for row, `y` for column).
+  - Grid: row-major (`y` then `x`).
+  - Use stable ordering within ~0.5px to preserve original order.
+- If any child lacks `absoluteBoundingBox`, keep the original order.
+
+### Group/boolean
+
+- GROUP and BOOLEAN_OPERATION nodes are kept in the tree for structure and hints.
+- They must not become positioning containers (`position: absolute/relative` is not injected there).
+
+### Relative containers for absolute children
+
+- When any node is absolutely positioned, the layout parent is ensured to be `position: relative`.
+- Do not add `left/top` to the container during this step.
+
+### Constraint calculation
+
+- Use `relativeTransform` translation plus node/parent sizes to compute `left/top/right/bottom`.
+- Respect constraints (`MIN|MAX|CENTER|STRETCH|SCALE`).
+- If no constraints exist, fall back to `left/top`.
+- All numeric outputs are rounded to at most 3 decimals.
+
+## Inferred auto layout
+
+- Inferred auto layout remains a hint in the raw Figma model, but once `get_code` emits flex/gap/padding for that node, the emitted auto-layout becomes the authoritative flow model for non-absolute children in this response.
+- Inferred layouts are flagged with `data-hint-auto-layout="inferred"` for downstream interpretation.
+- Children under inferred layout must not be constraint-positioned, unless `layoutPositioning === 'ABSOLUTE'`.
+- Any fixed/hug/fill cleanup must preserve that emitted flow model and only remove redundant size/padding expressions.
+
+## SVG and assets
+
+- Vector-only nodes or containers are classified before render as either:
+  - themeable single-color vectors, which preserve one contextual color channel on the emitted placeholder `svg` root markup.
+  - fixed-color vectors, which keep their internal palette in the exported SVG asset.
+- Image fills are exported from their exact native bytes when available.
+- Native image fills retain current-file identities as `figmaImageHash` on exact native-byte assets
+  or ordered unique `figmaImageHashes` on a composited fallback; preview bytes do not replace those
+  separately reported identities.
+- Video fills use one composited PNG node preview because the Plugin API has no video-byte reader.
+  Its asset descriptor retains ordered unique current-file identities as `figmaVideoHashes`; those
+  hashes describe the native fills, not the preview bytes.
+- Vector placeholders use the form `<svg data-src="...">`, keep `viewBox`, retain node-sized `width`/`height`, and expose the uploaded asset URL via `data-src` on the emitted `svg` root markup.
+- Themeable vector placeholders preserve the instance color on the emitted `svg` root markup, preferring token/class output when available.
+- Themeable-vector eligibility and single-channel color detection must share the same paint/effect visibility semantics used elsewhere in the asset pipeline; do not maintain a separate vector-only interpretation of visible paints, effects, or variable-backed solid colors.
+- `themeable` means one safe contextual color channel. The authoritative color evidence is the emitted `svg` root markup for that instance, not asset metadata. It does not imply multi-slot SVG theming.
+- The emitted markup is the tool's default delivery for the current response, not a mandatory final integration format. Clients may adapt vector delivery to repo policy, such as:
+  - existing icon/component primitives,
+  - import-time SVG transforms in the dev server or bundler,
+  - inline SVG,
+  - asset-backed SVG usage.
+- Any such adaptation must preserve the vector semantics:
+  - `themeable` vectors stay single-channel and context-color-driven,
+  - fixed-color vectors keep their internal palette.
+- Snapshot-preserved SVG assets may include `themeable: true` when the underlying vector is safe to adapt to a single contextual color channel, even if the current delivery stays asset-backed.
+- Public asset metadata does not carry per-instance theme color; that remains a markup concern.
+- SVG size comes from node size (rounded), not export metadata.
+- If the SVG export succeeded but asset upload failed, inline the SVG fallback rather than dropping the vector structure.
+- When vector export fails or assets are unavailable, preserve layout using a placeholder SVG with node size.
+- Omit `assets` when empty.
+
+## Plugin output
+
+- If a plugin returns component/code for an instance, the instance subtree is not collected or exported as vector assets.
+- Plugin output is preferred over fallback rendering for that instance.
+
+## Token handling
+
+- Token detection starts from the emitted markup; names may be transformed/re-written, and final used names are derived from the rewrite map (no second scan).
+- Token detection always strips `var(..., fallback)` before matching to avoid false positives.
+- `get_code` code output intentionally does not use inline `var(..., fallback)` values as the token value source; values, aliases, and modes belong in the `tokens` payload.
+- `get_code` emits canonical CSS variable IR for supported variable-backed properties when `resolveTokens` is `false`.
+- Canonical token identity is derived from variable identity and must stay stable across property families such as paint-derived channels, typography/text output, and future supported layout/effect properties.
+- Variable names are normalized consistently across Figma variable names, `codeSyntax`, and plugin transforms.
+- `codeSyntax` may be used as source metadata and alias input for detection/rewrite steps, but it must not directly dictate the final emitted MCP style value.
+- Figma `{Paint,Text,Effect}Style` names are not token identities for MCP. Only Figma Variables produce `tokens` entries.
+- Variables bound inside styles, paints, text fields, or effects should be discovered and emitted according to the variable rules above.
+- Style-name CSS variables are allowed only in UI/plugin codegen paths when a single CSS value can safely represent the applied style; they must not be promoted to MCP tokens.
+- `tokens` is a single map keyed by canonical token name. Each entry:
+  - `kind`: token kind.
+  - `value`:
+    - string for single-mode value or alias.
+    - map for multi-mode, keyed by `${collectionName}:${modeName}`.
+- `tokens` includes both directly used tokens and any alias-chain tokens.
+- When `resolveTokens` is `true`, code is resolved per-node (mode-aware); token values are literals.
+- This resolve step must also update themeable vector-placeholder root presentation color when that color is token-backed, so vector markup and token payload stay aligned.
+- When `resolveTokens` is `false`, token values remain aliases/literals as emitted by Figma/variables.
+- Collection names are assumed unique; duplicates are unsupported and should emit a warning.
+- Omit `tokens` when empty.
+
+### Repeated unbound color diagnostics
+
+- Only unresolved-token full responses may include `literalClusters`; resolved-token and shell
+  responses omit the field.
+- Consider exact literal colors on color-bearing properties after canonical variable output. Values
+  containing `var(...)`, gradients, images, shadows, non-color values, and repeats confined to one
+  node are excluded.
+- Normalize equivalent supported hex and rgb/rgba forms, require consumers on at least two concrete
+  nodes, sort deterministically, and cap both clusters and sampled consumers.
+- Emit one `literal-cluster` warning that points to the structured evidence. The diagnostic asks the
+  agent to classify ownership; it must not infer semantic equivalence from visual equality.
+- Include the additive metadata in the existing final `CallToolResult` byte-budget check.
+
+### Token pipeline guards
+
+- If no source names exist, skip the token pipeline entirely.
+- If no tokens are detected in the code, skip plugin transform/rewrites and token defs.
+- If rewrites produce no valid bridge entries, skip token defs.
+
+### Variable mode overrides
+
+- Nodes with explicit variable mode overrides emit:
+  - `data-hint-variable-mode="Collection=Mode;Collection=Mode"`.
+- This hint is for agents only and must be stripped from final output.
+
+## Text
+
+- Use `getStyledTextSegments` where available; failures are logged (not fatal).
+- Use fill data when Figma CSS omits visible text paints.
+
+## Logging
+
+- Emit `warnings` for inferred auto layout, depth-cap, repeated unbound color evidence, and shell guidance.
+- Emit `depth-cap` warnings when tree depth is capped.
+- Other degradations should be logged via the shared `logger` (prefix is automatic).
+- The tool may log high-level timing info via `logger.debug` for performance diagnostics.
+- Dev timing logs may include cache hit/miss counters and vector export result counters. These diagnostics are not part of the MCP response contract.
+
+## Performance
+
+- `getCSSAsync` must be called at most once per node.
+- Bound parallel CSS reads to four nodes and process results in source order. A failed read must
+  not discard successful styles from other nodes in the batch.
+- `getStyledTextSegments` only for text nodes.
+- Repeated node/style/variable/text-range/vector-analysis reads should go through one request-scoped cache context instead of pass-local ad hoc caches.
+- Text-segment rendering should use that same lookup context and resolve only variable fields
+  that contribute to the emitted text run.
+- Shared style helpers must depend only on injected lookup readers or pure paint inputs; they must not depend on an extension-local cache type.
+- Paint-style cache entries must store raw paints and size-independent facts only. Any gradient string still has to be resolved with the current node size.
+- Avoid repeated vector export calls; plan and export once per tree.
+- Bound parallel vector export work and merge results in source order; completion timing must not
+  make the agent-facing SVG or asset order nondeterministic.
+- Prepare plugin inputs at four concurrent nodes, batch at most 32 jobs per sandbox request, keep at
+  most four batch Workers active, and resolve each visible instance at most once per request.
+- Skip style collection for vector-root descendants (they are not rendered).
+- Variable candidate scanning uses bound variables and paint references; inferred variables are not required.
+- Variable candidate scanning must continue from the raw selected roots rather than `VisibleTree` so depth-cap and variable collection semantics stay unchanged.
+- Performance regressions should be gated with deterministic operation counts—collected/skipped CSS
+  reads, semantic-cache hit/miss counts, plugin preparation/batch concurrency, and vector-export
+  concurrency/order—not wall-clock thresholds.

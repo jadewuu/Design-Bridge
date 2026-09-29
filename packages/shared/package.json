@@ -1,0 +1,50 @@
+{
+  "name": "@tempad-dev/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared utilities, schemas and constants used by TemPad Dev extension and MCP server.",
+  "files": [
+    "dist",
+    "src/ui",
+    "src/svg-raw.d.ts"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./ui": {
+      "types": "./src/ui/index.ts",
+      "import": "./src/ui/index.ts"
+    },
+    "./ui/brand-icons": {
+      "types": "./src/ui/brand-icons.ts",
+      "import": "./src/ui/brand-icons.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch --no-clean",
+    "prepare": "pnpm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --config vitest.config.ts",
+    "test:run": "vitest run --config vitest.config.ts",
+    "test:coverage": "vitest run --config vitest.config.ts --coverage",
+    "lint": "eslint . --ext .ts,.mts,.cts,.js,.mjs,.cjs",
+    "lint:fix": "eslint . --fix --ext .ts,.mts,.cts,.js,.mjs,.cjs",
+    "format": "oxfmt -c ../../.oxfmtrc.json --ignore-path ../../.gitignore",
+    "format:check": "oxfmt -c ../../.oxfmtrc.json --ignore-path ../../.gitignore --check"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.138.0",
+    "tsdown": "^0.23.0",
+    "typescript": "^6.0.3",
+    "vitest": "5.0.0"
+  }
+}

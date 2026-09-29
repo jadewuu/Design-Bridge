@@ -1,0 +1,165 @@
+import { shallowRef } from 'vue'
+
+import { readBoundedResponseBytes } from '@/mcp/bounded-response'
+import { codegen } from '@/utils'
+
+import { useToast } from './toast'
+
+export const MAX_PLUGIN_SOURCE_BYTES = 512 * 1024
+
+export type PluginData = {
+  code: string
+  integrity: string
+  pluginName: string
+  resolvedUrl: string
+  source: string
+}
+
+export function usePluginInstall() {
+  const { show } = useToast()
+
+  const validity = shallowRef('')
+  const installing = shallowRef(false)
+  let controller: AbortController | null = null
+
+  function cancel() {
+    controller?.abort()
+    controller = null
+    installing.value = false
+  }
+
+  async function install(src: string, isUpdate = false) {
+    if (installing.value) {
+      return null
+    }
+
+    const currentController = new AbortController()
+    controller = currentController
+    const { signal } = currentController
+    const isCurrent = () => controller === currentController && !signal.aborted
+
+    installing.value = true
+
+    try {
+      if (src.startsWith('@')) {
+        throw new Error('Use a plugin URL; named plugins are no longer supported.')
+      }
+      const url = src
+      if (!isCurrent()) return null
+
+      const requestedUrl = validatePluginUrl(url)
+      const allowLoopbackRedirect =
+        requestedUrl.protocol === 'http:' && isLoopbackHost(requestedUrl.hostname)
+
+      const response = await fetch(url, { cache: 'no-cache', signal })
+      if (!isCurrent()) return null
+      ensureSuccessfulResponse(response)
+      validatePluginUrl(response.url || url, allowLoopbackRedirect)
+      ensureScriptLikeResponse(response)
+
+      const code = await readBoundedText(response, MAX_PLUGIN_SOURCE_BYTES)
+      if (!isCurrent()) return null
+      const integrity = await sha256(code)
+      if (!isCurrent()) return null
+
+      try {
+        const { pluginName } = await codegen(
+          {},
+          null,
+          { useRem: false, rootFontSize: 12, scale: 1 },
+          code
+        )
+        if (!isCurrent()) return null
+        if (!pluginName) {
+          validity.value = 'The plugin name must not be empty.'
+          return null
+        }
+        validity.value = ''
+        show(`Plugin "${pluginName}" ${isUpdate ? 'updated' : 'installed'} successfully.`)
+        return {
+          code,
+          integrity,
+          pluginName,
+          resolvedUrl: response.url || url,
+          source: src
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          validity.value = `Failed to evaluate the code: ${errorMessage(error, 'Unknown error')}`
+        }
+        return null
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        validity.value = `Failed to fetch the script content: ${errorMessage(error, 'Network error')}`
+      }
+      return null
+    } finally {
+      if (controller === currentController) {
+        controller = null
+        installing.value = false
+      }
+    }
+  }
+
+  return {
+    validity,
+    installing,
+    cancel,
+    install
+  }
+}
+
+export function isAllowedPluginSource(value: string): boolean {
+  try {
+    validatePluginUrl(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function validatePluginUrl(value: string, allowLoopbackHttp = true): URL {
+  const url = new URL(value)
+  if (url.username || url.password) {
+    throw new Error('Plugin URLs must not contain credentials.')
+  }
+  if (url.protocol === 'https:') return url
+  if (allowLoopbackHttp && url.protocol === 'http:' && isLoopbackHost(url.hostname)) return url
+  throw new Error('Plugin URLs must use HTTPS (HTTP is allowed only for local development).')
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+}
+
+function ensureSuccessfulResponse(response: Response): void {
+  if (response.status !== 200) {
+    throw new Error(`${response.status}: ${response.statusText || 'Request failed'}`)
+  }
+}
+
+function ensureScriptLikeResponse(response: Response): void {
+  const contentType = response.headers.get('content-type')?.toLowerCase()
+  if (contentType?.includes('text/html') || contentType?.includes('application/xhtml')) {
+    throw new Error('Plugin URL returned an HTML document instead of JavaScript.')
+  }
+}
+
+async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
+  const tooLarge = () => new Error(`Plugin content exceeds the ${maxBytes / 1024} KiB limit.`)
+  const bytes = await readBoundedResponseBytes(response, maxBytes, tooLarge)
+  return new TextDecoder().decode(bytes)
+}
+
+async function sha256(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join(
+    ''
+  )
+  return `sha256:${hex}`
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}

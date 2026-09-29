@@ -1,0 +1,231 @@
+# Changelog
+
+## 0.9.0
+
+- Added optional exact `sessionId` targeting to independent code, structure, screenshot,
+  and design-system reads without changing the active MCP badge.
+- Kept task-bound reads on their original extension connection, including when another connection
+  reports the same session ID, and rejected attempts to override the task's target session.
+- Exposed lightweight page listing and exact page-scoped component discovery with extension 0.22.0.
+- Allowed initial design-system discovery and explicit page structure reads up to 45 seconds for
+  cold-page loading, while preserving the shorter deadlines for ordinary reads and continuation.
+- Preserved valid code and screenshot responses when optional local asset paths alone would
+  exceed the inline budget, falling back to the existing asset URLs.
+- Simplified always-on agent instructions and retained compatibility with released extension
+  read/export paths. Use Agent Plugin 0.2.1 for the updated discovery and recovery guidance.
+
+## 0.8.0
+
+- Added native Codex server-queue admission and targeted cancellation through an
+  automatically managed queue-only companion. Receipts retain the admitting backend
+  across restarts, and uncertain writes are reconciled without duplicate submissions.
+
+- Preserved extension 0.20.0 read/export compatibility through an unversioned wire adapter,
+  separate legacy asset capability, full-content collision checks, and actionable upgrade
+  errors for authoring and new read options. Task-bound calls never fall back to legacy tabs.
+
+- Announced the extension bridge protocol versions the Hub serves, so a Hub upgrade can reach
+  an extension that predates it instead of forcing both sides to ship together.
+- Added design-task leases, pause/resume, anchored status, and permanent Stop cancellation.
+  Codex App uses host MCP metadata and native IPC; Claude retains lifecycle and Stop hooks.
+- Preserved native Codex turn identity across conversation-only MCP requests and recovered
+  unambiguous active turns after reconnection, so Stop can retain its interruption target.
+- Unified Codex Stop capability checks and target resolution, including after MCP disconnect.
+  Missing targets now report local cancellation without implying host interruption; Stop logs
+  record dispatch and outcome while exact-turn guards prevent stopping a later response.
+- Added native Codex App Queue and Steer feedback with stable delivery identities, durable
+  receipts, uncertain-admission reconciliation, and targeted removal of a task's queued comments.
+  Queue confirms host admission independently of execution; unavailable native admission
+  retains the bounded Hub waiting path when queue state is readable. Comments never fall back to hooks.
+
+- BREAKING: supported Node.js versions are now 22.x, 24.x, or 26+, matching the upgraded runtime
+  dependencies. Node.js 18 and 20 are no longer supported.
+- Released declarative Figma canvas authoring as a stable MCP workflow, paired with extension
+  0.21.0 and Agent Plugin 0.2.0. Release setup uses `@tempad-dev/mcp@latest`.
+- Added bounded `get_design_system` catalogs, exact resource lookup, and environment-only queries
+  for available font families and native styles.
+- Expanded `apply_canvas` with typed native layout, text, paint/effect, variable/style, page,
+  component/variant, instance, Slot, SVG, and raster-asset authoring. Variable utilities and named
+  text-style classes can bind resources declared in the same call.
+- Added exact page operations and native-only updates without markup, stable managed identities,
+  omission preservation, deterministic placement, dependency-aware rollback, no-op convergence,
+  and post-write structural verification.
+- Added bounded screenshots, exact node/page structure queries, and local asset paths so desktop
+  agents can inspect Hub-owned evidence. `upload_asset` stores generated raster images for canvas
+  authoring without returning encoded bytes.
+- Kept long-running canvas writes pending until a definitive result or extension disconnect,
+  rejected stale Hub reuse, and clarified that the MCP badge selects the target Figma session.
+- Paired the progressive `figma-canvas-authoring` skill with `figma-design-to-code` in the portable
+  Agent Plugin and synchronized client compatibility packages.
+
+## 0.8.0-alpha.0
+
+- Added `get_design_system`, which builds a compact immutable catalog with deterministic cursor
+  pages and short refs for component definitions on accessible pages plus local or directly
+  referenced variable, collection/mode, native style, and shader definitions. It neither inspects
+  canvas usage nor loads every page; exact-ref lookup returns one bounded definition only
+  when needed.
+- Added `apply_canvas`, a single declarative HTML + deterministic Tailwind utility write tool. The extension resolves
+  catalog refs, validates the complete native result, diffs the latest canvas, applies one undoable
+  patch, and performs structural verification.
+- Exposed `get_screenshot` as a bounded, read-only visual validation tool.
+- Added safe create and scoped incremental-update semantics with stable keys, omission preservation,
+  explicit descendant/root removal, no-op convergence, dependency-aware rollback, and stable-key
+  recovery through `get_structure`.
+- Added typed Figma-only result state for native geometry, layout, text, paints/effects/media,
+  variables, native styles, pages, authored components/variants, instances, and Slots without
+  exposing Plugin API operations as tools.
+- Added declarative SVG and local asset-backed image authoring without adding another model-visible
+  tool. Asset identity now uses full SHA-256 digests end to end.
+- Made `apply_canvas` available whenever MCP access is enabled in an editable Figma Design file;
+  the extension rejects Dev Mode and native read-only files.
+- Kept always-on guidance to user-priority routing and safety rules while moving authoring workflow,
+  syntax, executable local-resource examples, and advanced native features into the progressive
+  canvas-authoring skill. Design-system discovery is conditional rather than an authoring preflight,
+  while visually inventive work grounds unspecified style through project evidence, applicable
+  skills, or bounded domain research instead of generic model defaults.
+- Added standard MCP annotations for read-only and mutating tool behavior.
+
+## 0.7.1
+
+- Aligned MCP server identity metadata around the stable `tempad-dev` name and human-readable
+  `TemPad Dev` title.
+
+## 0.7.0
+
+- Hardened local WebSocket admission, active-extension routing, and connection-owned tool results
+  while preserving the existing zero-configuration connection flow.
+- Protected the asset HTTP server with capability URLs, extension-origin CORS checks, aggregate
+  quotas, bounded concurrency, and request timeouts.
+- Tightened browser-gateway result validation and expanded real-socket, abuse-limit, and lifecycle
+  regression coverage.
+
+## 0.6.3
+
+- Improved the local browser-gateway connection flow so users do not see noisy failed WebSocket port probes while the MCP server is not running.
+
+## 0.6.2
+
+- Added support for the extension's browser gateway connection flow, including keepalive messages and streamlined active-session state.
+- Improved MCP error handling when no active Figma session is available.
+
+## 0.6.1
+
+- Fixed duplicate Hub startup races by keeping a renewable lifecycle lock for the running Hub and probing stale sockets before removing them.
+- Improved MCP connection troubleshooting text for the Agent integration preferences.
+
+## 0.6.0
+
+- BREAKING: the minimum supported Node.js version for `@tempad-dev/mcp` is now `18.20.0`.
+
+## 0.5.1
+
+- Unified MCP tool inline budget enforcement around `64 KiB` `CallToolResult` bytes and simplified `get_code` warning guidance to rely on shell inline comments and returned `data-hint-id` values.
+
+## 0.5.0
+
+- Added themeable SVG metadata persistence through the asset HTTP server, asset store, and `get_assets` responses.
+- Updated MCP tool descriptions and instructions for smart vector delivery, Host app aware SVG integration, and single-channel `themeable` semantics.
+
+## 0.4.5
+
+- Updated `get_code` tool guidance and summaries for shell responses that list omitted child ids in inline comments.
+- Blocked unsafe MIME-derived asset extensions in asset URL handling.
+
+## 0.4.4
+
+- Improved tool call stability when multiple MCP clients are connected to the same hub.
+
+## 0.4.3
+
+- Improved failed tool call reporting with explicit MCP error codes in responses.
+- Improved troubleshooting for `get_code` and other tool failures with clearer diagnostics.
+
+## 0.4.2
+
+- Updated default tool exposure so `get_screenshot` is no longer listed in normal MCP tool discovery.
+- Updated asset guidance to URL-first downloads via `asset.url` for image and SVG bytes.
+- Removed asset retrieval through MCP `resources/read` and aligned tool summaries with the URL-first asset flow.
+
+## 0.4.1
+
+- Fixed deps for shared utils package and moved it to devDependencies.
+
+## 0.4.0
+
+- Minor version bump to align with TemPad Dev extension `0.17.0` release.
+- No MCP server runtime behavior changes in this release.
+
+## 0.3.13
+
+- No longer bundle `zod` into the distribution to reduce size.
+
+## 0.3.12
+
+- Improved tool troubleshooting by propagating structured error codes end-to-end.
+- Refined MCP instructions/tool guidance to reduce prompt bloat while keeping failure-path recovery actionable.
+
+## 0.3.11
+
+- Improved asset download compatibility: accept `/assets/{hash}.ext` while keeping `/assets/{hash}`.
+- Normalized MIME types and derived image extensions for stored filenames and download URLs.
+
+## 0.3.10
+
+- Assets are tool-linked and ephemeral: `resources/list` intentionally returns an empty list to avoid cross-session pollution.
+- Added asset cleanup TTL configuration and improved asset lifecycle handling.
+- Improved `get_code` usage instructions and layout guidance.
+
+## 0.3.9
+
+- Improved asset HTTP server robustness (upload/download error handling and request logging).
+
+## 0.3.8
+
+- Improved Node.js ESM compatibility for `npx @tempad-dev/mcp` consumers.
+
+## 0.3.7
+
+- Updated package dependency classification: moved `@tempad-dev/mcp-shared` to devDependencies (bundled into `dist`).
+
+## 0.3.6
+
+- Updated build bundling to include workspace-internal deps in `dist` for more reliable installs/runs.
+
+## 0.3.5
+
+- Version bump only.
+
+## 0.3.4
+
+- Monorepo migration of the MCP server package (no behavior change intended).
+
+## 0.3.3
+
+- Version bump only.
+
+## 0.3.2
+
+- Improved server-side logging and operational stability.
+
+## 0.3.1
+
+- Version bump only.
+
+## 0.3.0
+
+- Added `resource_link` blocks to tool outputs to make assets easier to fetch via MCP resources/HTTP fallback.
+- Hid `get_assets` from the default tool list (used internally for resolving asset descriptors).
+
+## 0.2.1
+
+- Improved error handling and diagnostics around socket closure, asset uploads, and token/variable resolution.
+
+## 0.2.0
+
+- Introduced an asset pipeline (HTTP upload/download + on-disk store) to avoid embedding large binaries in tool results.
+- Standardized tool parameters around a single `nodeId` and added token resolution options.
+
+## 0.1.0
+
+- Initial MCP server release (stdio MCP + WebSocket hub) exposing `get_code`, `get_structure`, `get_screenshot`, and `get_token_defs`.

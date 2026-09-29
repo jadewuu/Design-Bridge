@@ -1,0 +1,11 @@
+/// <reference types="@figma/plugin-typings" />
+
+interface Window {
+  figma: PluginAPI
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  webpackChunk_figma_web_bundler: any[] & { push: (...args: any[]) => any }
+  tempadTools?: Partial<import('@/mcp/runtime').TempadWindowHandlers>
+}
+
+declare const __DEV__: boolean
+declare const __TEMPAD_RUNTIME_FINGERPRINT__: string

@@ -1,0 +1,119 @@
+import type { TempadMcpErrorCode } from '@tempad-dev/shared'
+
+import { TEMPAD_MCP_ERROR_CODES } from '@tempad-dev/shared'
+import { nanoid } from 'nanoid'
+
+import type { PendingToolCall } from './types'
+
+import { log } from './shared'
+
+const pendingCalls = new Map<string, PendingToolCall>()
+
+type RegisterOptions = {
+  waitForDefinitiveResult?: boolean
+}
+
+function createToolError(
+  code: TempadMcpErrorCode,
+  message: string
+): Error & { code: TempadMcpErrorCode } {
+  const err = new Error(message) as Error & { code: TempadMcpErrorCode }
+  err.code = code
+  return err
+}
+
+export function register<T>(
+  extensionId: string,
+  timeout: number,
+  options: RegisterOptions = {}
+): { promise: Promise<T>; requestId: string } {
+  const requestId = nanoid()
+  const promise = new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (options.waitForDefinitiveResult) {
+        log.warn(
+          { reqId: requestId, extId: extensionId, timeout },
+          'Extension call exceeded its warning threshold; waiting for a definitive result.'
+        )
+        return
+      }
+      pendingCalls.delete(requestId)
+      reject(
+        createToolError(
+          TEMPAD_MCP_ERROR_CODES.EXTENSION_TIMEOUT,
+          `Extension did not respond within ${timeout / 1000}s.`
+        )
+      )
+    }, timeout)
+
+    pendingCalls.set(requestId, {
+      resolve: resolve as (value: unknown) => void,
+      reject,
+      timer,
+      extensionId
+    })
+  })
+  return { promise, requestId }
+}
+
+function pendingResponse(
+  requestId: string,
+  extensionId: string,
+  outcome: 'result' | 'error'
+): PendingToolCall | undefined {
+  const call = pendingCalls.get(requestId)
+  if (!call) {
+    log.warn({ reqId: requestId }, `Received ${outcome} for unknown/timed-out call.`)
+    return
+  }
+  if (call.extensionId !== extensionId) {
+    log.warn(
+      { reqId: requestId, expectedExtId: call.extensionId, receivedExtId: extensionId },
+      `Ignored tool ${outcome} from the wrong extension.`
+    )
+    return
+  }
+  clearTimeout(call.timer)
+  return call
+}
+
+export function resolve(requestId: string, extensionId: string, payload: unknown): void {
+  const call = pendingResponse(requestId, extensionId, 'result')
+  if (!call) return
+  call.resolve(payload)
+  pendingCalls.delete(requestId)
+}
+
+export function reject(requestId: string, extensionId: string, error: Error): void {
+  const call = pendingResponse(requestId, extensionId, 'error')
+  if (!call) return
+  call.reject(error)
+  pendingCalls.delete(requestId)
+}
+
+export function cleanupForExtension(extensionId: string): void {
+  for (const [reqId, call] of pendingCalls.entries()) {
+    const { timer, reject: fail, extensionId: extId } = call
+    if (extId === extensionId) {
+      clearTimeout(timer)
+      fail(
+        createToolError(
+          TEMPAD_MCP_ERROR_CODES.EXTENSION_DISCONNECTED,
+          'Extension disconnected before providing a result.'
+        )
+      )
+      pendingCalls.delete(reqId)
+      log.warn({ reqId, extId: extensionId }, 'Rejected pending call from disconnected extension.')
+    }
+  }
+}
+
+export function cleanupAll(): void {
+  pendingCalls.forEach((call, reqId) => {
+    const { timer, reject: fail } = call
+    clearTimeout(timer)
+    fail(new Error('Hub is shutting down.'))
+    log.debug({ reqId }, 'Rejected pending tool call due to shutdown.')
+  })
+  pendingCalls.clear()
+}

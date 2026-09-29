@@ -1,0 +1,45 @@
+{
+  "name": "@tempad-dev/plugins",
+  "version": "0.6.2",
+  "description": "Plugin utils for TemPad Dev.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ecomfe/tempad-dev.git",
+    "directory": "packages/plugins"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepare": "pnpm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --config vitest.config.ts",
+    "test:run": "vitest run --config vitest.config.ts",
+    "test:coverage": "vitest run --config vitest.config.ts --coverage",
+    "lint": "eslint . --ext .ts,.mts,.cts,.js,.mjs,.cjs",
+    "lint:fix": "eslint . --fix --ext .ts,.mts,.cts,.js,.mjs,.cjs",
+    "format": "oxfmt -c ../../.oxfmtrc.json --ignore-path ../../.gitignore",
+    "format:check": "oxfmt -c ../../.oxfmtrc.json --ignore-path ../../.gitignore --check",
+    "prepublishOnly": "pnpm run build"
+  },
+  "devDependencies": {
+    "tsdown": "^0.23.0",
+    "typescript": "^6.0.3",
+    "vitest": "5.0.0"
+  }
+}

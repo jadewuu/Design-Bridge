@@ -1,0 +1,613 @@
+import {
+  TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION,
+  TEMPAD_MCP_BRIDGE_SUBPROTOCOL,
+  type RuntimeHelloMessage
+} from '@tempad-dev/shared'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { McpHubClient } from '@/mcp/broker/hub-client'
+
+class FakeWebSocket extends EventTarget {
+  readyState = 0
+  sent: string[] = []
+
+  constructor(readonly url: string) {
+    super()
+  }
+
+  close(): void {
+    if (this.readyState === 3) return
+    this.readyState = 3
+    this.dispatchClose(true)
+  }
+
+  fail(message?: string): void {
+    const event = new Event('error')
+    if (message) Object.defineProperty(event, 'message', { value: message })
+    this.dispatchEvent(event)
+  }
+
+  closeFromRemote(wasClean = false): void {
+    this.readyState = 3
+    this.dispatchClose(wasClean)
+  }
+
+  open(): void {
+    if (this.readyState === 3) return
+    this.readyState = 1
+    this.dispatchEvent(new Event('open'))
+  }
+
+  receive(payload: unknown): void {
+    this.receiveRaw(JSON.stringify(payload))
+  }
+
+  receiveRaw(data: unknown): void {
+    this.dispatchEvent(new MessageEvent('message', { data }))
+  }
+
+  send(payload: string): void {
+    this.sent.push(payload)
+  }
+
+  private dispatchClose(wasClean: boolean): void {
+    const event = new Event('close')
+    Object.defineProperty(event, 'wasClean', { value: wasClean })
+    this.dispatchEvent(event)
+  }
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 5; index++) {
+    await Promise.resolve()
+  }
+}
+
+function stateMessage(activeId: string | null = null) {
+  return {
+    activeId,
+    assetServerUrl: 'http://127.0.0.1:9000',
+    type: 'state'
+  }
+}
+
+function completeHandshake(socket: FakeWebSocket, activeId: string | null = null): void {
+  socket.open()
+  socket.receive({
+    type: 'registered',
+    id: 'gateway-1',
+    protocolVersion: TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION
+  })
+  socket.receive(stateMessage(activeId))
+}
+
+function createClient(
+  sockets: FakeWebSocket[],
+  events: ConstructorParameters<typeof McpHubClient>[0] = {},
+  runtimeIdentity: RuntimeHelloMessage | null = null
+): McpHubClient {
+  return new McpHubClient(
+    events,
+    (url, protocol) => {
+      expect(protocol).toBe(TEMPAD_MCP_BRIDGE_SUBPROTOCOL)
+      const socket = new FakeWebSocket(url)
+      sockets.push(socket)
+      return socket as unknown as WebSocket
+    },
+    runtimeIdentity
+  )
+}
+
+function installHubProbe(isReachable: (port: number) => boolean = () => true): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => {
+      const port = Number(new URL(url).port)
+      return isReachable(port)
+        ? Promise.resolve({ status: 426 } as Response)
+        : Promise.reject(new TypeError('fetch failed'))
+    })
+  )
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
+
+describe('mcp/broker/hub-client', () => {
+  it('publishes extension runtime identity before declaring the handshake connected', async () => {
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const runtimeIdentity = {
+      type: 'runtimeHello' as const,
+      extensionVersion: '0.21.0',
+      extensionRuntimeFingerprint: 'a'.repeat(64)
+    }
+    const client = createClient(sockets, {}, runtimeIdentity)
+
+    client.start()
+    await flushMicrotasks()
+    completeHandshake(sockets[0]!)
+    await flushMicrotasks()
+
+    expect(sockets[0]?.sent.map((message) => JSON.parse(message))).toContainEqual(runtimeIdentity)
+    expect(client.getSnapshot().status).toBe('connected')
+  })
+
+  it('tries candidate ports in order and reuses the last successful port first', async () => {
+    const sockets: FakeWebSocket[] = []
+    const snapshots: Array<ReturnType<McpHubClient['getSnapshot']>> = []
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+
+    const client = createClient(sockets, {
+      onSnapshot: (snapshot) => snapshots.push(snapshot)
+    })
+
+    client.start()
+    await flushMicrotasks()
+    expect(sockets[0]?.url).toBe('ws://127.0.0.1:6221')
+
+    sockets[0]?.fail()
+    await flushMicrotasks()
+
+    expect(sockets[1]?.url).toBe('ws://127.0.0.1:7432')
+
+    completeHandshake(sockets[1]!)
+    await flushMicrotasks()
+
+    expect(client.getSnapshot()).toMatchObject({ status: 'connected' })
+
+    client.stop()
+    await flushMicrotasks()
+    client.start()
+    await flushMicrotasks()
+
+    expect(sockets[2]?.url).toBe('ws://127.0.0.1:7432')
+    expect(snapshots.at(-1)?.status).toBe('connecting')
+  })
+
+  it('sends keepalive ping while the socket is open', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+    completeHandshake(sockets[0]!)
+    await flushMicrotasks()
+    vi.advanceTimersByTime(20_000)
+
+    expect(sockets[0]?.sent).toContain(JSON.stringify({ type: 'ping' }))
+  })
+
+  it('does not install keepalive after a reentrant stop during handshake completion', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets, {
+      onSnapshot: (snapshot) => {
+        if (snapshot.status === 'connected') client.stop()
+      }
+    })
+
+    client.start()
+    await flushMicrotasks()
+    completeHandshake(sockets[0]!)
+    await flushMicrotasks()
+
+    expect(client.getSnapshot().status).toBe('idle')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('ignores stale socket probes after a stop/start cycle', async () => {
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+    completeHandshake(sockets[0]!)
+    client.stop()
+    client.start()
+    await flushMicrotasks()
+
+    expect(sockets[0]?.readyState).toBe(3)
+    expect(client.getSnapshot().status).toBe('connecting')
+
+    completeHandshake(sockets[1]!)
+    await flushMicrotasks()
+
+    expect(client.getSnapshot().status).toBe('connected')
+  })
+
+  it('retries after every candidate is unreachable', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe(() => false)
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+
+    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(client.getSnapshot()).toMatchObject({
+      errorMessage: expect.stringContaining('MCP server is not running'),
+      status: 'error'
+    })
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushMicrotasks()
+    expect(fetch).toHaveBeenCalledTimes(6)
+    client.stop()
+  })
+
+  it.each([
+    ['malformed traffic', '{', 'Received malformed message from MCP server'],
+    [
+      'duplicate registration',
+      JSON.stringify({
+        type: 'registered',
+        id: 'replacement',
+        protocolVersion: TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION
+      }),
+      'Received duplicate registration from MCP server'
+    ],
+    [
+      'a non-loopback state update',
+      JSON.stringify({
+        activeId: 'gateway-1',
+        assetServerUrl: 'https://collector.example/assets',
+        type: 'state'
+      }),
+      'MCP server advertised a non-loopback asset URL'
+    ],
+    [
+      'a changed loopback asset endpoint',
+      JSON.stringify({
+        activeId: 'gateway-1',
+        assetServerUrl: 'http://127.0.0.1:9001/replacement',
+        type: 'state'
+      }),
+      'MCP server changed its asset server URL'
+    ]
+  ])('closes and reconnects after %s on an established connection', async (_name, raw, error) => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const snapshots: Array<ReturnType<McpHubClient['getSnapshot']>> = []
+    const client = createClient(sockets, {
+      onSnapshot: (snapshot) => snapshots.push(snapshot)
+    })
+
+    client.start()
+    await flushMicrotasks()
+    completeHandshake(sockets[0]!, 'gateway-1')
+    await flushMicrotasks()
+    sockets[0]?.receiveRaw(raw)
+
+    expect(sockets[0]?.readyState).toBe(3)
+    expect(snapshots).toContainEqual(expect.objectContaining({ errorMessage: error }))
+    expect(client.getSnapshot()).toMatchObject({
+      activeId: null,
+      assetServerUrl: null,
+      registeredId: null,
+      status: 'connecting'
+    })
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushMicrotasks()
+    expect(sockets[1]?.url).toBe('ws://127.0.0.1:6221')
+    client.stop()
+  })
+
+  it('sends activation/results only while connected and reports live socket errors', async () => {
+    class TestErrorEvent extends Event {
+      constructor(
+        type: string,
+        readonly message: string
+      ) {
+        super(type)
+      }
+    }
+    vi.stubGlobal('ErrorEvent', TestErrorEvent)
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const snapshots: Array<ReturnType<McpHubClient['getSnapshot']>> = []
+    const client = createClient(sockets, {
+      onSnapshot: (snapshot) => snapshots.push(snapshot)
+    })
+
+    client.sendActivate()
+    client.sendToolResult({ id: 'before-connect', payload: {}, type: 'toolResult' })
+    client.start()
+    await flushMicrotasks()
+    completeHandshake(sockets[0]!)
+    await flushMicrotasks()
+    client.sendActivate()
+    client.sendToolResult({ id: 'call-1', payload: { ok: true }, type: 'toolResult' })
+    sockets[0]?.dispatchEvent(new TestErrorEvent('error', 'socket failed'))
+
+    expect(sockets[0]?.sent).toEqual([
+      JSON.stringify({ type: 'activate' }),
+      JSON.stringify({ id: 'call-1', payload: { ok: true }, type: 'toolResult' })
+    ])
+    expect(snapshots.at(-1)?.errorMessage).toBe('socket failed')
+    client.stop()
+  })
+
+  it.each([
+    ['malformed traffic', ['{']],
+    [
+      'duplicate registration',
+      [
+        JSON.stringify({
+          type: 'registered',
+          id: 'gateway-1',
+          protocolVersion: TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION
+        }),
+        JSON.stringify({
+          type: 'registered',
+          id: 'gateway-2',
+          protocolVersion: TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION
+        })
+      ]
+    ],
+    ['duplicate state', [JSON.stringify(stateMessage()), JSON.stringify(stateMessage())]],
+    [
+      'tool traffic',
+      [JSON.stringify({ id: 'call-1', payload: { args: {}, name: 'get_code' }, type: 'toolCall' })]
+    ],
+    [
+      'a non-loopback asset URL',
+      [
+        JSON.stringify({
+          type: 'registered',
+          id: 'gateway-1',
+          protocolVersion: TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION
+        }),
+        JSON.stringify({
+          activeId: null,
+          assetServerUrl: 'https://collector.example/assets',
+          type: 'state'
+        })
+      ]
+    ]
+  ])('rejects %s during the handshake and continues probing', async (_name, messages) => {
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+    sockets[0]?.open()
+    messages.forEach((message) => sockets[0]?.receiveRaw(message))
+    await flushMicrotasks()
+
+    expect(sockets[0]?.readyState).toBe(3)
+    expect(sockets[1]?.url).toBe('ws://127.0.0.1:7432')
+    expect(client.getSnapshot().assetServerUrl).toBeNull()
+    client.stop()
+  })
+
+  it.each([
+    ['missing', {}],
+    ['different', { protocolVersion: TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION + 1 }],
+    [
+      'dropped',
+      {
+        protocolVersion: TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION + 2,
+        supportedProtocolVersions: [TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION + 1]
+      }
+    ]
+  ])('reports a %s bridge protocol after probing candidates', async (_case, announcement) => {
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+    for (let index = 0; index < 3; index++) {
+      sockets[index]?.open()
+      sockets[index]?.receive({ type: 'registered', id: `gateway-${index}`, ...announcement })
+      await flushMicrotasks()
+    }
+
+    expect(client.getSnapshot()).toMatchObject({
+      errorMessage: expect.stringContaining('protocol mismatch'),
+      status: 'error'
+    })
+    expect(client.getSnapshot().errorMessage).toContain(
+      'Restart the agent and its Design Bridge MCP connection using the matching internal release'
+    )
+    expect(sockets.every((socket) => socket.sent.length === 0)).toBe(true)
+    client.stop()
+  })
+
+  it('recovers after an old Hub is replaced without sending new frames to it', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const identity: RuntimeHelloMessage = {
+      type: 'runtimeHello',
+      extensionVersion: '0.21.0',
+      extensionRuntimeFingerprint: 'a'.repeat(64)
+    }
+    const client = createClient(sockets, {}, identity)
+    client.start()
+    await flushMicrotasks()
+    for (let index = 0; index < 3; index++) {
+      sockets[index]!.open()
+      sockets[index]!.receive({ type: 'registered', id: 'old-hub' })
+      await flushMicrotasks()
+    }
+    expect(client.getSnapshot().errorMessage).toContain('Reloading Figma alone does not update')
+    expect(sockets.every((socket) => socket.readyState === 3 && socket.sent.length === 0)).toBe(
+      true
+    )
+    await vi.advanceTimersByTimeAsync(3000)
+    completeHandshake(sockets[3]!)
+    await flushMicrotasks()
+    expect(client.getSnapshot()).toMatchObject({ status: 'connected', errorMessage: null })
+    expect(sockets[3]!.sent.map((message) => JSON.parse(message))).toEqual([identity])
+    client.stop()
+  })
+
+  it('connects to a newer hub that still serves this extension protocol', async () => {
+    // A Hub can ship ahead of store review; it stays usable while it announces this version.
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+    sockets[0]?.open()
+    sockets[0]?.receive({
+      type: 'registered',
+      id: 'gateway-0',
+      protocolVersion: TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION + 1,
+      supportedProtocolVersions: [
+        TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION,
+        TEMPAD_MCP_BRIDGE_PROTOCOL_VERSION + 1
+      ],
+      announcedLater: 'ignored'
+    })
+    sockets[0]?.receive({
+      type: 'state',
+      activeId: 'gateway-0',
+      assetServerUrl: 'http://127.0.0.1:6221'
+    })
+    await flushMicrotasks()
+
+    expect(client.getSnapshot()).toMatchObject({ errorMessage: null, status: 'connected' })
+    client.stop()
+  })
+
+  it('ignores stale events from a replaced socket', async () => {
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+    completeHandshake(sockets[0]!)
+    await flushMicrotasks()
+    client.stop()
+    await flushMicrotasks()
+    client.start()
+    await flushMicrotasks()
+    completeHandshake(sockets[1]!)
+    await flushMicrotasks()
+
+    sockets[0]?.closeFromRemote()
+
+    expect(client.getSnapshot().status).toBe('connected')
+    expect(sockets[1]?.readyState).toBe(1)
+  })
+
+  it('parses hub registration, state, and tool calls', async () => {
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const toolCall = vi.fn()
+    const client = createClient(sockets, { onToolCall: toolCall })
+
+    client.start()
+    await flushMicrotasks()
+    completeHandshake(sockets[0]!, 'gateway-1')
+    await flushMicrotasks()
+    sockets[0]?.receive({
+      id: 'call-1',
+      payload: { args: { nodeId: '1:2' }, name: 'get_code' },
+      type: 'toolCall'
+    })
+
+    expect(client.getSnapshot()).toMatchObject({
+      activeId: 'gateway-1',
+      assetServerUrl: 'http://127.0.0.1:9000',
+      registeredId: 'gateway-1',
+      status: 'connected'
+    })
+    expect(toolCall).toHaveBeenCalledWith({
+      id: 'call-1',
+      payload: { args: { nodeId: '1:2' }, name: 'get_code' },
+      type: 'toolCall'
+    })
+  })
+
+  it('skips WebSocket construction for unreachable candidate ports', async () => {
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    const sockets: FakeWebSocket[] = []
+    const probedPorts: number[] = []
+    installHubProbe((port) => {
+      probedPorts.push(port)
+      return port === 8128
+    })
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+
+    expect(probedPorts).toEqual([6221, 7432, 8128])
+    expect(sockets).toHaveLength(1)
+    expect(sockets[0]?.url).toBe('ws://127.0.0.1:8128')
+    client.stop()
+  })
+
+  it('continues to the next candidate when a reachable WebSocket does not speak Tempad', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    installHubProbe()
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+    sockets[0]?.open()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushMicrotasks()
+
+    expect(sockets[0]?.readyState).toBe(3)
+    expect(sockets[1]?.url).toBe('ws://127.0.0.1:7432')
+    client.stop()
+  })
+
+  it('ignores stale probe failures after stop', async () => {
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    let rejectProbe: ((reason?: unknown) => void) | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((_resolve, reject) => {
+            rejectProbe = reject
+          })
+      )
+    )
+    const sockets: FakeWebSocket[] = []
+    const client = createClient(sockets)
+
+    client.start()
+    await flushMicrotasks()
+    client.stop()
+    rejectProbe?.(new TypeError('fetch failed'))
+    await flushMicrotasks()
+
+    expect(client.getSnapshot()).toMatchObject({ errorMessage: null, status: 'idle' })
+    expect(sockets).toHaveLength(0)
+  })
+})

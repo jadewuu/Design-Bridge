@@ -1,0 +1,241 @@
+import type { FigmaLookupReaders } from '@/utils/figma-style/types'
+
+import { canonicalizeValue, formatHexAlpha, toFigmaVarExpr } from '@/utils/css'
+import { isRenderablePaint } from '@/utils/figma-paint'
+import { resolveTextSegmentVariable, resolveVariableAlias } from '@/utils/figma-variables'
+import { toDecimalPlace } from '@/utils/number'
+
+import {
+  CODE_FONT_KEYWORDS,
+  type ResolvedFill,
+  type RunStyleEntry,
+  type StyledTextSegmentSubset,
+  type TokenRef
+} from './types'
+
+const RENDERED_TYPO_FIELDS = [
+  'fontFamily',
+  'fontSize',
+  'fontWeight',
+  'lineHeight',
+  'letterSpacing'
+] as const
+
+export function resolveRunAttrs(
+  seg: StyledTextSegmentSubset,
+  typography: Record<string, TokenRef>,
+  fills: ResolvedFill[]
+): Record<string, string> {
+  const style: Record<string, string> = {}
+  let visibleSolid: Extract<ResolvedFill, { type: 'SOLID' }> | undefined
+  let hasVisiblePaint = false
+  for (const fill of fills) {
+    if (!isRenderablePaint(fill.raw)) continue
+    hasVisiblePaint = true
+    if (fill.type === 'SOLID') {
+      visibleSolid = fill
+      break
+    }
+  }
+
+  if (visibleSolid) {
+    const val = formatHexAlpha(visibleSolid.raw.color, visibleSolid.raw.opacity ?? 1)
+    const colorValue = constructCssVar(visibleSolid.token, val)
+    if (colorValue) style.color = colorValue
+  } else if (fills.length === 0 || !hasVisiblePaint) {
+    style.color = 'transparent'
+  }
+
+  const { fontFamily, fontSize, lineHeight, letterSpacing, fontWeight } = typography
+
+  const fontVal = constructCssVar(fontFamily, seg.fontName?.family)
+  if (fontVal) style['font-family'] = fontVal
+
+  const sizeVal = constructCssVar(
+    fontSize,
+    typeof seg.fontSize === 'number' ? `${toDecimalPlace(seg.fontSize)}px` : undefined
+  )
+  if (sizeVal) style['font-size'] = sizeVal
+
+  if (fontWeight) {
+    const wVal = inferFontWeight(seg.fontName?.style, seg.fontWeight)
+    const weightValue = constructCssVar(fontWeight, wVal != null ? String(wVal) : undefined)
+    if (weightValue) style['font-weight'] = weightValue
+  } else if (typeof seg.fontWeight === 'number') {
+    style['font-weight'] = String(seg.fontWeight)
+  }
+
+  const lhVal = constructCssVar(lineHeight, formatLineHeightValue(seg.lineHeight))
+  if (lhVal) style['line-height'] = lhVal
+
+  const lsVal = constructCssVar(letterSpacing, formatLetterSpacingValue(seg.letterSpacing))
+  if (lsVal) style['letter-spacing'] = lsVal
+
+  if (seg.textCase) {
+    const transform = mapTextCase(seg.textCase)
+    if (transform) style['text-transform'] = transform
+  }
+
+  if (seg.textDecoration === 'UNDERLINE' || seg.textDecoration === 'STRIKETHROUGH') {
+    style['text-decoration-line'] = seg.textDecoration.toLowerCase().replace('_', '-')
+  }
+
+  return style
+}
+
+export function resolveTokens(
+  textNode: TextNode,
+  seg: StyledTextSegmentSubset,
+  readers?: FigmaLookupReaders
+) {
+  const typography: Record<string, TokenRef> = {}
+
+  RENDERED_TYPO_FIELDS.forEach((field) => {
+    const variable = resolveTextSegmentVariable(
+      textNode,
+      seg as StyledTextSegmentSubset & { boundVariables?: Record<string, unknown> },
+      field,
+      readers
+    )
+    const token = variableToTokenRef(variable)
+    if (token) typography[field] = token
+  })
+
+  const fillRaw = Array.isArray(seg.fills) ? seg.fills : []
+  const fills: ResolvedFill[] = fillRaw.map((paint) => {
+    if (paint.type === 'SOLID') {
+      const colorToken = variableToTokenRef(
+        resolveVariableAlias(paint.boundVariables?.color, readers)
+      )
+      return { type: 'SOLID', token: colorToken, raw: paint }
+    }
+    return { type: paint.type, raw: paint }
+  })
+
+  return { typography, fills }
+}
+
+export function computeDominantStyle(runStyles: RunStyleEntry[]): Record<string, string> {
+  if (!runStyles.length) return {}
+
+  const counts: Record<string, Record<string, { raw: string; score: number }>> = {}
+  let totalWeight = 0
+
+  for (const { style, weight } of runStyles) {
+    totalWeight += weight
+    for (const [key, value] of Object.entries(style)) {
+      const normalized = canonicalizeValue(key, value)
+      const bucket = (counts[key] ??= {})
+      const entry = bucket[normalized]
+
+      if (!entry) {
+        bucket[normalized] = { raw: value, score: weight }
+      } else {
+        entry.score += weight
+      }
+    }
+  }
+
+  const dominant: Record<string, string> = {}
+  const threshold = totalWeight * 0.5
+
+  for (const [key, bucket] of Object.entries(counts)) {
+    let bestValue: { raw: string; score: number } | undefined
+
+    for (const entry of Object.values(bucket)) {
+      if (!bestValue || entry.score > bestValue.score) {
+        bestValue = entry
+      }
+    }
+
+    if (bestValue && bestValue.score >= threshold) {
+      dominant[key] = bestValue.raw
+    }
+  }
+
+  return dominant
+}
+
+export function omitCommon(
+  style: Record<string, string>,
+  common: Record<string, string>
+): Record<string, string> {
+  if (!common || !Object.keys(common).length) return style
+  const result: Record<string, string> = {}
+
+  for (const [key, value] of Object.entries(style)) {
+    const commonValue = common[key]
+    if (
+      commonValue === undefined ||
+      canonicalizeValue(key, value) !== canonicalizeValue(key, commonValue)
+    ) {
+      result[key] = value
+    }
+  }
+  return result
+}
+
+export function isCodeFont(family: string): boolean {
+  const lower = family.toLowerCase()
+  return CODE_FONT_KEYWORDS.some((k) => lower.includes(k))
+}
+
+export function inferFontWeight(styleName?: string | null, explicit?: number): number | undefined {
+  if (typeof explicit === 'number') return explicit
+  if (!styleName) return undefined
+  const matched = styleName.match(/(\d{3})/)
+  if (matched) return Number(matched[1])
+
+  const lowered = styleName.toLowerCase()
+  const mapping: Record<string, number> = {
+    black: 900,
+    extrabold: 800,
+    ultrabold: 800,
+    bold: 700,
+    semibold: 600,
+    demibold: 600,
+    medium: 500,
+    light: 300,
+    thin: 200
+  }
+
+  for (const [k, v] of Object.entries(mapping)) {
+    if (lowered.includes(k)) return v
+  }
+
+  return undefined
+}
+
+function mapTextCase(textCase?: TextCase): string | undefined {
+  const map: Record<string, string> = {
+    UPPER: 'uppercase',
+    LOWER: 'lowercase',
+    TITLE: 'capitalize'
+  }
+  return map[textCase as string]
+}
+
+function constructCssVar(token?: TokenRef | null, fallback?: string): string | undefined {
+  if (token) return toFigmaVarExpr(token.name)
+  return fallback?.trim() || undefined
+}
+
+function variableToTokenRef(variable: Variable | null): TokenRef | null {
+  return variable ? { id: variable.id, name: variable.name } : null
+}
+
+function formatLineHeightValue(lineHeight?: LineHeight): string | undefined {
+  if (!lineHeight) return undefined
+  if (lineHeight.unit === 'AUTO') return 'normal'
+  if ('value' in lineHeight) {
+    const val = toDecimalPlace(lineHeight.value)
+    return lineHeight.unit === 'PERCENT' ? `${val}%` : `${val}px`
+  }
+  return undefined
+}
+
+function formatLetterSpacingValue(letterSpacing?: LetterSpacing): string | undefined {
+  if (!letterSpacing || !('value' in letterSpacing)) return undefined
+  const val = toDecimalPlace(letterSpacing.value)
+  return letterSpacing.unit === 'PERCENT' ? `${val}%` : `${val}px`
+}

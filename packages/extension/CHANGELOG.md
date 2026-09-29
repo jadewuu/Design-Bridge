@@ -1,0 +1,595 @@
+# Changelog
+
+## 0.22.0
+
+- Improved code generation by reusing request-scoped text bindings, variable IDs, and style
+  lookups across scanning, formatting, and rendering, while removing duplicate text rendering work.
+- Bounded structure construction and automatic depth analysis instead of building a full tree
+  before truncation. Page context now participates in the final response budget.
+- Added lightweight page discovery and exact page-scoped component scans to `get_design_system`,
+  with explicit warnings when unscoped discovery may miss components on unloaded pages.
+- Reduced repeated work in design-system pagination, font selection, and token formatting.
+- Paired this release with MCP 0.9.0 and Agent Plugin 0.2.1 for exact-session reads and updated
+  discovery guidance.
+
+## 0.21.1
+
+- Fixed the extension version display.
+- Fixed the design-task status bar jumping back after dragging.
+- Simplified Codex installation and aligned agent setup instructions across the extension and website.
+
+## 0.21.0
+
+- Fixed Stop dispatch ordering so cancellation-state synchronization does not skip native host
+  interruption. Local cancellation remains durable when the host disconnects.
+
+- Negotiated versioned registration before the first WebSocket frame. An already-running old
+  Hub now gives explicit MCP restart/update instructions and reconnects after replacement.
+
+- Accepted any MCP server that still serves this extension's bridge protocol, and ignored
+  fields added by a newer server, so an MCP release no longer has to wait for store review.
+  A server that dropped this protocol still reports an explicit mismatch and keeps retrying.
+- Added anchored design-task status, Stop/Done controls, and persistent general and element
+  comments. Stop permanently fences the cancelled task, including after reconnection.
+- Added native Codex App Queue and Steer delivery. Confirmed host admission clears the submitted
+  comments and allows a new batch before queued work executes; uncertain delivery retains drafts
+  without automatic resubmission.
+- Added context-specific shortcuts: Command/Ctrl+Enter saves an element comment and queues the
+  whole batch; in the general composer it sends the batch with Steer. Shift+Enter inserts a newline.
+
+- Added declarative native Figma canvas authoring with `apply_canvas`: create and incrementally
+  update designs, remove managed roots or pages, and choose the active page. Writes require an
+  editable Figma Design file with MCP access enabled.
+- Added bounded `get_design_system` discovery and exact lookup for accessible components,
+  variables, collections and modes, native styles, and shaders. Font queries discover available
+  families and exact native styles without scanning file resources.
+- Added native layout and geometry, rich text, paints and effects, pages, components and variants,
+  instances, Slots, variables, styles, SVG, and PNG/JPEG/GIF asset authoring.
+- Added CSS variable utilities and named text-style classes for native resource bindings, including
+  resources declared in the same call. New theme tokens and aliases now resolve correctly when
+  added to existing variable collections whose modes are omitted.
+- Preserved stable identities and omitted live state during partial updates, with explicit removal,
+  deterministic create placement, dependency and font preflight, rollback, no-op convergence,
+  one Undo boundary, and structural verification.
+- Added bounded screenshots and native structure read-back for visual inspection, identity recovery,
+  and focused repair. Improved field-level validation and recovery for invalid Canvas markup.
+- Added portable sans, serif, and monospace font utilities and hardened text reflow, truncation,
+  component updates, variable cleanup, and SVG removal.
+- Added the `figma-canvas-authoring` skill alongside `figma-design-to-code`, with progressive native
+  references, grounded design guidance, scoped editing, and explicit Direct, Reuse, and Author
+  resource workflows.
+- Made the portable Agent Plugins 1.0 bundle the shared installation source, with synchronized
+  Codex and Claude compatibility packages and refreshed icons.
+- Required an explicit Figma-tab choice when MCP sessions need disambiguation. Unsupported native
+  EASING and TIMING variables are skipped with a warning while supported catalog resources remain
+  available.
+- Updated dependencies and paired this release with MCP 0.8.0 and Agent Plugin 0.2.0. The MCP server
+  now requires Node.js 22.x, 24.x, or 26+.
+
+## 0.20.0
+
+- Hid Figma's inactive mode switcher in read-only files after its toolbar structure changed.
+- Redesigned Agent integration as a Figma-aligned setup dialog with focused guidance for Codex,
+  Cursor, Claude Code, Gemini, VS Code, OpenCode, TRAE, and other MCP-compatible agents.
+- Added the best available setup path for each agent, including one-click links, agent plugins,
+  native CLI commands, and copyable manual MCP and skill configuration.
+- Improved setup readability and interaction details with wrapping command blocks, full-block copy
+  highlighting, accessible navigation, and refreshed light and dark marketing screenshots.
+- Aligned the website and README setup guidance with the same supported agents and recommended
+  integration paths.
+
+## 0.19.0
+
+- Isolated programmable plugins in an opaque-origin sandbox with fresh Workers, execution limits,
+  source integrity checks, and syntax-aware external-module blocking.
+- Hardened the local Agent integration with strict WebSocket handshakes, connection-owned results,
+  same-extension session replacement, and continuous loopback asset-endpoint validation without
+  adding setup steps.
+- Improved MCP `get_code` performance for large selections with early shell fallback, batched plugin
+  execution, and bounded deterministic vector export.
+- Fixed the plugin sandbox in local extension development by bundling its Worker code into local blob
+  Workers while keeping production network access disabled.
+- Fixed MCP `get_code` timeouts for zero-height vector nodes by omitting invalid non-positive
+  dimensions from asset uploads.
+
+## 0.18.13
+
+- Improved Agent integration reliability across multiple Figma tabs by preserving explicit active-session ownership.
+- Validated the local MCP server handshake before selecting a WebSocket port, avoiding connections to unrelated local services.
+- Rejected oversized asset uploads before bridge transfer and limited local host access to the required `127.0.0.1` origin.
+
+## 0.18.12
+
+- Fixed Agent integration permission prompts on Chrome and Edge so enabling the MCP server correctly asks for local host access and connects after approval.
+- Kept Agent integration enabled when local host permission is missing and made the MCP badge retry permission from a user click.
+
+## 0.18.11
+
+- MCP server access now asks for local host permission only when Agent integration is enabled, instead of requesting local access up front.
+- Improved MCP connection reliability across Figma tabs by routing local server traffic through the extension background broker and keeping one active Figma session.
+- Improved MCP asset uploads so generated image and SVG assets are uploaded through the extension background context.
+
+## 0.18.10
+
+- Renamed the MCP preferences section to Agent integration and updated setup copy for the bundled agent skill plus MCP server flow.
+- Added Codex plugin setup guidance and removed the outdated Windsurf quick setup entry.
+
+## 0.18.9
+
+- Added spacing between the Preferences and minimize buttons.
+
+## 0.18.8
+
+- Fixed PaintStyle variable output so safe single-color styles can flow through plugin `transformVariable`, while multi-fill and gradient styles still expand to concrete CSS.
+- Improved variable and `codeSyntax` consistency across UI, plugin, and MCP output paths.
+
+## 0.18.7
+
+- Updated MCP `get_code` variable output to use Figma variable names as canonical token references while still using `WEB codeSyntax` as a lookup hint.
+- Preserved CSS variable fallbacks for plugin `transformVariable` code blocks without changing the default Code panel output.
+- Exposed the user's variable display preference to plugin transform hooks.
+
+## 0.18.6
+
+- Improved variable output consistency. The Code panel now preserves Figma variable `WEB codeSyntax` exactly when present, so custom token syntax is respected.
+- MCP `get_code` now keeps variable-backed styles on stable CSS variable references for agent workflows, avoiding mixed `codeSyntax` and CSS variable output.
+
+## 0.18.5
+
+- Fixed panel stacking so TemPad Dev no longer fights Figma's non-static UI layers.
+- Fixed incorrect same-node multi-fill background generation in code output and MCP `get_code`.
+
+## 0.18.4
+
+- Fixed the "Scroll into view" button not appearing for selected nodes in the inspect panel.
+
+## 0.18.3
+
+- Unified MCP tool inline budgeting around a shared `64 KiB` `CallToolResult` byte limit instead of the older `get_code`-only token estimate.
+- Simplified MCP `get_code` warnings to lightweight `type + message` guidance. Shell continuation now relies on inline omitted-child comments, and depth-cap follow-up uses returned `data-hint-id` values.
+- Improved MCP `get_code` performance by adding a request-scoped cache layer that reuses node semantics, style lookups, variable lookups, paint-style summaries, and vector analysis across passes within one request.
+- Added higher-signal dev tracing for MCP `get_code`, including cache hit/miss counters and vector export result breakdowns for faster bottleneck analysis.
+
+## 0.18.2
+
+- Bundled Prism extra language modules locally so the extension no longer fetches remotely hosted code for syntax highlighting under Manifest V3.
+- Wait for the page's global Prism instance before loading extra languages, avoiding startup crashes when Prism is not ready yet.
+- Load Prism languages in the background and refresh code blocks once highlighting support becomes available, so the UI no longer waits on Prism startup.
+
+## 0.18.1
+
+- Moved MCP configuration metadata into the shared package so the extension and other surfaces stay aligned.
+- Added the website setup flow so MCP clients can now be configured directly from the site.
+- Fixed the async script patch regression so injected rewrite patches apply reliably again.
+
+## 0.18.0
+
+- Added smart vector delivery for MCP `get_code`: themeable single-color vectors now inline safely, fixed-color vectors stay asset-backed, and `vectorMode=snapshot` preserves asset fidelity when requested.
+- Improved vector handling with Figma-semantics-based themeable detection, safer SVG normalization for `currentColor`, stable SVG ids, and preserved node-sized dimensions.
+- Prioritized plugin/component output ahead of vector asset export and aligned docs/skill guidance with Host app specific SVG policies.
+
+## 0.17.4
+
+- Hardened the injected UI loader so it always boots the bundled extension UI entry.
+- Fixed JavaScript code block escaping for backslashes and template literal control sequences.
+- Kept Figma `url(...) lightgray ...` background fallback handling aligned with real shorthand output.
+
+## 0.17.3
+
+- Added MCP `get_code` shell fallback for over-budget selections, returning the current wrapper with inline omitted child ids and shell guidance warnings for follow-up fetches.
+- Improved shell fallback messaging and render helper organization to keep parent composition facts intact while clarifying agent consumption.
+- Fixed code block fallback escaping when Prism is unavailable.
+
+## 0.17.2
+
+- Improved MCP `get_code` budget errors to include current usage and overage details for faster scope adjustment.
+- Updated the Agent skill install shortcut command to `npx skills add <skill-url>` in MCP preferences.
+- Renamed the bundled Agent skill to `figma-design-to-code`.
+- Updated MCP `get_code` size handling to fail fast with guidance when output exceeds budget, instead of returning truncated code.
+- Improved MCP `get_code` stability for larger selections to reduce truncated outputs in agent clients.
+- Simplified MCP `get_structure` output so hierarchy and geometry are easier to consume with lower context overhead.
+- Updated MCP asset references in generated output to use direct `asset.url` downloads.
+
+## 0.17.1
+
+- Improved `get_code` output for masked icon/container structures so generated layout is closer to what you see in Figma.
+- Improved gradient direction output so generated code matches Figma gradient angles more closely.
+
+## 0.17.0
+
+- Improved Figma style resolution in code output (especially fill/stroke handling and variable consistency).
+- Improved gradient border codegen for both CSS and MCP `get_code` Tailwind output.
+
+## 0.16.0
+
+- Added a “Variable display” preference (Reference/Resolved/Both) so you can choose whether code shows variables, resolved values, or both.
+- Code output now resolves fill/stroke styles more consistently after unbinding (including gradient borders).
+
+## 0.15.3
+
+- Make the plugin API more stable.
+
+## 0.15.2
+
+- Added an Agent skill copy shortcut in MCP preferences.
+
+## 0.15.1
+
+- Improved communication between loader and UI entry.
+- Make the panel scrollable again.
+
+## 0.15.0
+
+- Adjusted startup logic for better compatibility.
+
+## 0.14.8
+
+- Improved MCP troubleshooting and error messaging.
+- Added support for gradient fills in code output.
+- Updated Codex branding in MCP configuration.
+
+## 0.14.7
+
+- Adjusted panel overflow clipping so resize handles stay clickable while keeping rounded corners.
+
+## 0.14.6
+
+- Set a minimum panel height and refined max-height calculation.
+- Improved key lock behavior when hovering the canvas.
+- Improved Figma availability checks and layout readiness handling.
+
+## 0.14.5
+
+- Only show the panel visual hint when the panel significantly overlaps with Figma's own panels.
+
+## 0.14.4
+
+- Improved MCP tool output.
+- Improved the visual hint for TemPad Dev panel.
+- Significantly improved the performance of `get_code` tool.
+- Made TemPad Dev work seamlessly across soft navigation between pages in Figma.
+
+## 0.14.3
+
+- Fixed the missing `host_permissions` in manifest.json.
+
+## 0.14.2
+
+- Fixed the styles of MCP client buttons.
+
+## 0.14.1
+
+- Added a visual hint to help users find TemPad Dev panel easier when it overlaps with Figma's own panels.
+- Improve cursor display when measure mode is active.
+- Improved button styles.
+
+## 0.14.0
+
+- Added MCP server support to let agents/IDEs pull code, structure, and screenshots from your current Figma selection.
+- The inspect panel can be resized horizontally by dragging either its left or right edge. (Suggested and implemented by @molinla at [#34](https://github.com/ecomfe/tempad-dev/pull/34))
+- Measure mode won't trigger node duplication anymore when dragging a node in design mode.
+- Improved the error message when `window.figma` is unavailable.
+- Improved error handling for retrieving dev resources.
+
+## 0.13.1
+
+- Fixed select component style under dark mode.
+- Redeployed the rewrite script so users on older versions can continue using the extension normally.
+
+## 0.13.0
+
+- Updated to comply with Chrome Web Store policies by moving DNR redirection rules to the extension side.
+- Improved select component style in preferences panel to match Figma's UI.
+
+## 0.12.0
+
+- Added support for documentation links and dev resource links.
+- Switch to always use `figma.notify`.
+- Remove Quirks mode.
+
+## 0.11.4
+
+- Strip trailing whitespaces and newlines from code blocks.
+
+## 0.11.3
+
+- Added color preview for color tokens in code blocks.
+- Cleaned up view-only mode alert messages and CTA buttons.
+
+## 0.11.2
+
+- Improved code block styles.
+
+## 0.11.1
+
+- Fixed loading error on Figma slides and site pages.
+
+## 0.11.0
+
+- Improved compatibility with Figma's lazy loading mechanism.
+- Improved rewriting rules.
+
+## 0.10.2
+
+- Fixed an issue with CSS code generation when optimizing dimension code.
+
+## 0.10.1
+
+- Fixed the copy button for code blocks.
+- Improved error handling when fetching live rules.
+
+## 0.10.0
+
+- Variables in code panels are now copyable.
+
+## 0.9.0
+
+- Updated the script rewrite logic.
+- Moved the rewriter script to a remote URL on GitHub repo.
+- Added dynamic DNR rules syncing mechanism.
+
+## 0.8.5
+
+- Update WXT to fix the problem that multiple WXT-based web extensions invalidates each other.
+
+## 0.8.4
+
+- Updated the script rewrite logic.
+
+## 0.8.3
+
+- Improved user instructions when `window.figma` is unavailable.
+- Trime string props for codegen.
+
+## 0.8.2
+
+- Fixed script replacement after Figma update.
+
+## 0.8.1
+
+- Fixed script replacement after Figma update.
+
+## 0.8.0
+
+- Fixed `window.figma` recovery for clients that are loading script files without `.br` extension.
+- Quirks mode is no longer available as Figma removed the `window.DebuggingHelpers.logSelected` API.
+
+## 0.7.1
+
+- Improved component codegen.
+
+## 0.7.0
+
+- Added a new option: `scale`.
+
+## 0.6.3
+
+- Improved component codegen, remove `undefined` values automatically.
+
+## 0.6.2
+
+- Added `visible` info to component codegen.
+
+## 0.6.1
+
+- No longer supports built-in plugins.
+
+## 0.6.0
+
+- Provided a brand new icon for the extension.
+
+## 0.5.9
+
+- Fixed vector fills extraction.
+
+## 0.5.8
+
+- Added vector node support for component codegen plugin.
+
+## 0.5.7
+
+- Added main component info for component codegen plugins.
+
+## 0.5.6
+
+- Fixed the problem that worker requester isn't properly cached.
+
+## 0.5.5
+
+- Fixed that plugin update was not working.
+
+## 0.5.4
+
+- Added plugin update support.
+- Improved focus styles.
+
+## 0.5.3
+
+- Improve HTML escaping and indentation for component codegen.
+
+## 0.5.2
+
+- Fix indentation for component codegen.
+
+## 0.5.1
+
+- Improved the code output for component codegen.
+- Fixed a tiny UI issue under UI2.
+
+## 0.5.0
+
+- Added children support to `DesignComponent` for component codegen.
+
+## 0.4.10
+
+- Improved component codegen.
+
+## 0.4.9
+
+- Fixed plugin import regression.
+- Improved component event handler codegen.
+
+## 0.4.8
+
+- Added `transformComponent` support for plugins.
+
+## 0.4.7
+
+- Fixed rule priority for removing CSP header.
+
+## 0.4.6
+
+- Fixed CSP issue by temporarily remove `main_frame` CSP header.
+
+## 0.4.5
+
+- Added a badge to show what plugin is transforming the code.
+
+## 0.4.4
+
+- Added plugin registry.
+- Improved error reporting when importing plugins.
+
+## 0.4.3
+
+- Plugins can now be exported with default exports.
+- Plugin transform hooks now accepts a new `options` parameter.
+
+## 0.4.2
+
+- Fixed the regression that preferences were not reactive.
+
+## 0.4.1
+
+- Added `host_permissions` so that `declarativeNetworkResources` can take effect.
+
+## 0.4.0
+
+- Added plugins support.
+- Added experimental support for enabling `window.figma` in view-only mode.
+
+## 0.3.5
+
+- Excluded individual border if `border-width` is `0` in quirks mode.
+
+## 0.3.4
+
+- Fixed the problem that borders are not correctly recognized in quirks mode.
+- Fixed a style detail when the extension is minimized.
+
+## 0.3.3
+
+- Improved toast.
+
+## 0.3.2
+
+- Adapted toast and quirks mode hint to UI3.
+
+## 0.3.1
+
+- Fixed CSS unit for `stroke-width`.
+
+## 0.3.0
+
+- Added support for UI3.
+
+## 0.2.10
+
+- Fixed that `stroke-dash-pattern` may be unavailable.
+
+## 0.2.9
+
+- Updated text data retrieval for quirks mode.
+
+## 0.2.8
+
+- Added compatibility for `Tem.RichText`.
+
+## 0.2.7
+
+- Figma file paths may now start with `design`.
+
+## 0.2.6
+
+- Used overlay scrollbar to prevent layout shift.
+
+## 0.2.5
+
+- Quirks mode hint now shows how to duplicate to drafts upon click.
+
+## 0.2.4
+
+- Fixed paint data and stroke data might be undefined in quirks mode.
+
+## 0.2.3
+
+- Added codegen support for rotation in quirks mode.
+- Stopped forcing into quirks mode by mistake.
+
+## 0.2.2
+
+- Fixed that font props were generated for non-text nodes in quirks mode.
+- Fixed that rgba colors were treated as multiple fill data in quirks mode.
+
+## 0.2.1
+
+- Fixed `line-height` in quirks mode.
+
+## 0.2.0
+
+- Added support for font related CSS codegen for text nodes in quirks mode.
+- Refactored quirks mode so that its now more modular and easier to maintain.
+
+## 0.1.1
+
+- Improved codegen for `padding` in quirks mode.
+
+## 0.1.0
+
+- Added experimental support for quirks mode that can run under view-only pages.
+
+## 0.0.9
+
+- Lowered z-index to prevent Figma's own menus and popups from being covered by TemPad Dev.
+- Fixed the problem that double clicking pref button triggers the panel's toggle.
+
+## 0.0.8
+
+- Improved compatibility with TemPad icon names.
+
+## 0.0.7
+
+- Added lib name badge for TemPad components.
+- Improved display name for icons for TemPad components.
+
+## 0.0.6
+
+- Fixed the problem that code copy doesn't update correctly.
+
+## 0.0.5
+
+- Improved selection updates via keyboard shortcuts.
+- Improved TemPad code indentation.
+- Improved panel sizing.
+
+## 0.0.4
+
+- Fixed lock mode when user <kbd>  </kbd> + drag with mouses.
+- Fixed selection updates triggered by objects panel or <kbd>⌘</kbd>.
+- Fixed display when multiple nodes are selected.
+
+## 0.0.3
+
+- Optimized panel drag range based on Figma's floating window handling to prevent dragging beyond visibility.
+
+## 0.0.2
+
+- Added preferences: CSS unit and root font size.
+- Added toggling minimized mode by double clicking the header.
+- Improved JavaScript style object output.
+- Fixed `z-index` so that the panel won't be covered by nav bar.
+- Fixed text-overflow style for node names.
+
+## 0.0.1
+
+- First version.
