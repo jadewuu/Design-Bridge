@@ -8,7 +8,7 @@ Design Bridge 将 Chrome 中的 Figma 设计选区通过本机 MCP 提供给 AI 
 - Node.js 22、24 或 26+。运行 `node --version` 检查。
 - 已能正常使用的 Codex CLI 或 Claude Code。Claude Code 的公司模型继续由 CC Switch 配置；Design Bridge 不配置模型或 API Key。
 
-从私密仓库的 [Releases](https://github.com/jadewuu/Design-Bridge/releases) 下载 `Design-Bridge-*.tar.gz`，解压到长期保留的位置，例如 `~/Tools/Design-Bridge`。安装配置会引用此目录的绝对路径，之后不要移动。
+从 [Releases](https://github.com/jadewuu/Design-Bridge/releases) 下载 `Design-Bridge-*.tar.gz`，解压到长期保留的位置，例如 `~/Tools/Design-Bridge`。安装配置会引用此目录的绝对路径，之后不要移动。
 
 ## 2. 安装 Chrome 扩展
 
