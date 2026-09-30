@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f6f7f8" />
+    <meta
+      name="description"
+      content="Design Bridge 将 Chrome 中的 Figma 选区通过本机 MCP 交给 Codex、Claude Code 等 AI 开发工具，帮助团队从设计走向代码。"
+    />
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>Design Bridge · 从 Figma 选区到项目代码</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="#top" aria-label="Design Bridge，回到顶部">
+          <img src="./icon.svg" width="34" height="34" alt="" />
+          <span>Design Bridge</span>
+        </a>
+        <nav class="header-nav" aria-label="主导航">
+          <a href="#workflow">工作方式</a>
+          <a href="#start">快速开始</a>
+          <a class="header-link" href="https://github.com/jadewuu/Design-Bridge/releases"
+            >获取安装包 <span aria-hidden="true">↗</span></a
+          >
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero container" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="eyebrow-line"></span> 给设计与开发团队的本地桥接工具</p>
+          <h1 id="hero-title">让设计上下文<br /><em>进入代码现场。</em></h1>
+          <p class="hero-description">
+            在 Figma 选中一个节点，Design Bridge 将它的结构与样式交给你正在使用的 AI 开发工具。
+            从理解设计到复用项目组件实现页面，少一次截图、猜测和反复说明。
+          </p>
+          <div class="hero-actions">
+            <a
+              class="button button-primary"
+              href="https://github.com/jadewuu/Design-Bridge/releases"
+              >下载试用包 <span aria-hidden="true">↗</span></a
+            >
+            <a class="button button-text" href="#start"
+              >查看使用方法 <span aria-hidden="true">→</span></a
+            >
+          </div>
+          <p class="hero-note">支持 Codex CLI、Claude Code；其他本地 MCP 客户端可手动接入。</p>
+        </div>
+
+        <div
+          class="hero-visual"
+          role="img"
+          aria-label="Figma 当前选区通过本机 Design Bridge 传递给 Codex 或 Claude Code，再在项目中实现界面"
+        >
+          <div class="visual-grid" aria-hidden="true"></div>
+          <div class="flow-head">
+            <span class="flow-kicker">DESIGN → DEVELOPMENT</span
+            ><span class="flow-indicator">LOCAL MCP</span>
+          </div>
+          <div class="flow-window figma-window">
+            <div class="window-top">
+              <span class="window-app">01 / FIGMA</span><span class="window-status">当前选区</span>
+            </div>
+            <div class="figma-layout">
+              <div class="figma-sidebar"><span></span><span></span><span></span><span></span></div>
+              <div class="figma-canvas">
+                <div class="canvas-tag">Frame / Dashboard</div>
+                <div class="canvas-selection">
+                  <span class="canvas-title"></span>
+                  <span class="canvas-copy"></span>
+                  <div class="canvas-cards"><i></i><i></i><i></i></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="flow-bridge">
+            <span class="bridge-line"></span
+            ><span class="bridge-chip"
+              ><img src="./icon.svg" width="21" height="21" alt="" /> Design Bridge
+              <small>127.0.0.1</small></span
+            ><span class="bridge-line"></span>
+          </div>
+          <div class="flow-window agent-window">
+            <div class="window-top">
+              <span class="window-app">02 / CODING AGENT</span
+              ><span class="window-status">项目工作区</span>
+            </div>
+            <div class="agent-content">
+              <span class="prompt-sign">&gt;</span>
+              <p>读取当前 Figma 选区，讲解结构和样式；<br />复用项目现有组件与主题实现 UI。</p>
+            </div>
+            <div class="agent-output">
+              <span class="output-mark">✓</span> 设计上下文已连接
+              <span class="output-file">src / components</span>
+            </div>
+          </div>
+          <p class="flow-caption">选中设计 · 读取上下文 · 落到现有项目</p>
+        </div>
+      </section>
+
+      <div class="proof-bar" aria-label="产品特点">
+        <div class="container proof-inner">
+          <span>本机连接 <strong>127.0.0.1</strong></span>
+          <span>只读设计 <strong>view-only 可用</strong></span>
+          <span>沿用你已有的 <strong>AI 工具与模型配置</strong></span>
+        </div>
+      </div>
+
+      <section
+        id="workflow"
+        class="section workflow-section container"
+        aria-labelledby="workflow-title"
+      >
+        <div class="section-intro">
+          <p class="section-label">工作方式</p>
+          <h2 id="workflow-title">设计不再只是<br />一张参考图。</h2>
+          <p>把当前 Figma 选区的可用信息带进开发会话，让 AI 在真实项目约束下工作。</p>
+        </div>
+        <div class="workflow-list">
+          <article class="workflow-item">
+            <span class="item-index">01</span>
+            <div>
+              <h3>在 Figma 选中目标</h3>
+              <p>打开设计文件，选择需要讲解或实现的 Frame、组件或节点。</p>
+            </div>
+            <span class="item-arrow" aria-hidden="true">↗</span>
+          </article>
+          <article class="workflow-item">
+            <span class="item-index">02</span>
+            <div>
+              <h3>让 Agent 读取设计</h3>
+              <p>通过本机 MCP 获取选区结构、样式和资源，先理解设计意图。</p>
+            </div>
+            <span class="item-arrow" aria-hidden="true">↗</span>
+          </article>
+          <article class="workflow-item">
+            <span class="item-index">03</span>
+            <div>
+              <h3>在现有项目中实现</h3>
+              <p>结合项目组件、主题和路由完成 UI，并运行项目检查与预览。</p>
+            </div>
+            <span class="item-arrow" aria-hidden="true">↗</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="quote-section" aria-labelledby="prompt-title">
+        <div class="container quote-inner">
+          <div>
+            <p class="section-label">一句话开始</p>
+            <h2 id="prompt-title">把这段话交给你的 Agent。</h2>
+          </div>
+          <blockquote>
+            “使用 Design Bridge 读取当前 Figma 选区，先讲解结构和样式，再在本项目实现
+            UI。复用项目现有组件、主题和路由，运行项目检查并预览。”
+          </blockquote>
+        </div>
+      </section>
+
+      <section id="start" class="section start-section container" aria-labelledby="start-title">
+        <div class="start-heading">
+          <p class="section-label">快速开始</p>
+          <h2 id="start-title">四步接通设计与代码。</h2>
+          <p>
+            准备 Chrome、Figma Web、Node.js 22 / 24 / 26+，以及可正常使用的 Codex CLI 或 Claude
+            Code。
+          </p>
+        </div>
+        <ol class="start-list">
+          <li>
+            <span class="step-number">01</span>
+            <div>
+              <h3>下载并解压</h3>
+              <p>从 Releases 获取完整安装包，放在长期保留的目录。</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">02</span>
+            <div>
+              <h3>加载 Chrome 扩展</h3>
+              <p>
+                在 <code>chrome://extensions</code> 开启开发者模式，加载包内
+                <code>chrome-extension</code> 文件夹，并刷新 Figma。
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">03</span>
+            <div>
+              <h3>开启 MCP 并连接工具</h3>
+              <p>
+                在 Design Bridge 面板的 Preferences → Agent integration 开启 MCP，允许访问本机
+                <code>127.0.0.1</code>。在安装包目录运行对应命令：
+              </p>
+              <div class="commands">
+                <code>node install.mjs codex</code><code>node install.mjs claude</code>
+              </div>
+              <small>只使用其中一个工具时，只运行对应命令。</small>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">04</span>
+            <div>
+              <h3>选中节点，开始实现</h3>
+              <p>重启 AI 客户端或开启新会话，在 Figma 选中节点，然后发送上面的提示词。</p>
+            </div>
+          </li>
+        </ol>
+        <div class="start-actions">
+          <a class="button button-primary" href="https://github.com/jadewuu/Design-Bridge/releases"
+            >获取安装包 <span aria-hidden="true">↗</span></a
+          ><a
+            class="guide-link"
+            href="https://github.com/jadewuu/Design-Bridge/blob/main/internal/README.zh-Hans.md"
+            >阅读完整安装与排障指南 <span aria-hidden="true">↗</span></a
+          >
+        </div>
+      </section>
+
+      <aside class="data-note container" aria-label="数据使用说明">
+        <span class="note-symbol" aria-hidden="true">i</span>
+        <p>
+          Design Bridge 的本机桥接仅监听 <code>127.0.0.1</code>。读取的设计数据会交给你使用的 AI
+          客户端和其配置的模型服务；请按团队的数据使用要求选择模型。
+        </p>
+      </aside>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <div class="footer-brand">
+          <img src="./icon.svg" width="26" height="26" alt="" /><span>Design Bridge</span>
+        </div>
+        <p>让设计与开发保持同一个上下文。</p>
+        <div class="footer-links">
+          <a href="https://github.com/jadewuu/Design-Bridge">GitHub</a
+          ><a href="https://github.com/jadewuu/Design-Bridge/blob/main/internal/README.zh-Hans.md"
+            >使用指南</a
+          >
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
