@@ -21,8 +21,8 @@
         </a>
         <nav class="header-nav" aria-label="主导航">
           <a href="#workflow">工作方式</a>
-          <a href="#video-guide">视频指引</a>
           <a href="#start">快速开始</a>
+          <a href="#video-guide">视频指引</a>
           <a class="header-link" href="https://github.com/jadewuu/Design-Bridge/releases"
             >获取安装包 <span aria-hidden="true">↗</span></a
           >
@@ -49,7 +49,6 @@
               >查看使用方法 <span aria-hidden="true">→</span></a
             >
           </div>
-          <p class="hero-note">支持 Codex CLI、Claude Code；其他本地 MCP 客户端可手动接入。</p>
         </div>
 
         <div
@@ -103,14 +102,6 @@
         </div>
       </section>
 
-      <div class="proof-bar" aria-label="产品特点">
-        <div class="container proof-inner">
-          <span>本机连接 <strong>127.0.0.1</strong></span>
-          <span>只读设计 <strong>view-only 可用</strong></span>
-          <span>沿用你已有的 <strong>AI 工具与模型配置</strong></span>
-        </div>
-      </div>
-
       <section
         id="workflow"
         class="section workflow-section container"
@@ -128,7 +119,6 @@
               <h3>在 Figma 选中目标</h3>
               <p>打开设计文件，选择需要讲解或实现的 Frame、组件或节点。</p>
             </div>
-            <span class="item-arrow" aria-hidden="true">↗</span>
           </article>
           <article class="workflow-item">
             <span class="item-index">02</span>
@@ -136,7 +126,6 @@
               <h3>让 Agent 读取设计</h3>
               <p>通过本机 MCP 获取选区结构、样式和资源，先理解设计意图。</p>
             </div>
-            <span class="item-arrow" aria-hidden="true">↗</span>
           </article>
           <article class="workflow-item">
             <span class="item-index">03</span>
@@ -144,62 +133,7 @@
               <h3>在现有项目中实现</h3>
               <p>结合项目组件、主题和路由完成 UI，并运行项目检查与预览。</p>
             </div>
-            <span class="item-arrow" aria-hidden="true">↗</span>
           </article>
-        </div>
-      </section>
-
-      <section id="video-guide" class="section video-section" aria-labelledby="video-guide-title">
-        <div class="container video-layout">
-          <div class="video-copy">
-            <p class="section-label">视频指引</p>
-            <h2 id="video-guide-title">用 77 秒走完安装与使用流程。</h2>
-            <p>
-              从加载 Chrome 扩展、连接 Codex 或 Claude Code，到读取 Figma
-              选区并在现有项目中实现页面。
-            </p>
-            <dl class="video-meta">
-              <div>
-                <dt>时长</dt>
-                <dd>01:17</dd>
-              </div>
-              <div>
-                <dt>内容</dt>
-                <dd>安装 · 连接 · 实现</dd>
-              </div>
-              <div>
-                <dt>语言</dt>
-                <dd>中文讲解与字幕</dd>
-              </div>
-            </dl>
-          </div>
-          <figure class="video-frame">
-            <video
-              controls
-              playsinline
-              preload="metadata"
-              poster="./media/design-bridge-guide-poster.jpg"
-              aria-label="Design Bridge 安装与使用视频指引"
-            >
-              <source src="./media/design-bridge-guide.mp4" type="video/mp4" />
-              你的浏览器暂不支持视频播放，请
-              <a href="./media/design-bridge-guide.mp4">下载视频</a>后观看。
-            </video>
-            <figcaption>打开声音，跟随视频完成首次连接。</figcaption>
-          </figure>
-        </div>
-      </section>
-
-      <section class="quote-section" aria-labelledby="prompt-title">
-        <div class="container quote-inner">
-          <div>
-            <p class="section-label">一句话开始</p>
-            <h2 id="prompt-title">把这段话交给你的 Agent。</h2>
-          </div>
-          <blockquote>
-            “使用 Design Bridge 读取当前 Figma 选区，先讲解结构和样式，再在本项目实现
-            UI。复用项目现有组件、主题和路由，运行项目检查并预览。”
-          </blockquote>
         </div>
       </section>
 
@@ -248,7 +182,11 @@
             <span class="step-number">04</span>
             <div>
               <h3>选中节点，开始实现</h3>
-              <p>重启 AI 客户端或开启新会话，在 Figma 选中节点，然后发送上面的提示词。</p>
+              <p>重启 AI 客户端或开启新会话，在 Figma 选中节点，然后发送：</p>
+              <blockquote class="start-prompt">
+                使用 Design Bridge 读取当前 Figma 选区，先讲解结构和样式，再在本项目实现
+                UI。复用项目现有组件、主题和路由，运行项目检查并预览。
+              </blockquote>
             </div>
           </li>
         </ol>
@@ -260,6 +198,33 @@
             href="https://github.com/jadewuu/Design-Bridge/blob/main/internal/README.zh-Hans.md"
             >阅读完整安装与排障指南 <span aria-hidden="true">↗</span></a
           >
+        </div>
+      </section>
+
+      <section id="video-guide" class="section video-section" aria-labelledby="video-guide-title">
+        <div class="container video-layout">
+          <div class="video-copy">
+            <p class="section-label">视频指引</p>
+            <h2 id="video-guide-title">用 77 秒走完安装与使用流程。</h2>
+            <p>
+              从加载 Chrome 扩展、连接 Codex 或 Claude Code，到读取 Figma
+              选区并在现有项目中实现页面。
+            </p>
+          </div>
+          <figure class="video-frame">
+            <video
+              controls
+              playsinline
+              preload="metadata"
+              poster="./media/design-bridge-guide-poster.jpg"
+              aria-label="Design Bridge 安装与使用视频指引"
+            >
+              <source src="./media/design-bridge-guide.mp4" type="video/mp4" />
+              你的浏览器暂不支持视频播放，请
+              <a href="./media/design-bridge-guide.mp4">下载视频</a>后观看。
+            </video>
+            <figcaption>01:17 · 中文讲解与字幕 · 打开声音跟随操作</figcaption>
+          </figure>
         </div>
       </section>
 
@@ -277,7 +242,6 @@
         <div class="footer-brand">
           <img src="./icon.svg" width="26" height="26" alt="" /><span>Design Bridge</span>
         </div>
-        <p>让设计与开发保持同一个上下文。</p>
         <div class="footer-links">
           <a href="https://github.com/jadewuu/Design-Bridge">GitHub</a
           ><a href="https://github.com/jadewuu/Design-Bridge/blob/main/internal/README.zh-Hans.md"

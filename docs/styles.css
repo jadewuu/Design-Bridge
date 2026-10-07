@@ -57,7 +57,6 @@ code,
 .bridge-chip,
 .agent-content,
 .agent-output,
-.proof-inner,
 .workflow-item,
 .start-list li,
 .start-actions,
@@ -191,12 +190,6 @@ h1 em {
 }
 .button-text:hover {
   color: #2563eb;
-}
-.hero-note {
-  margin: 27px 0 0;
-  font-size: 11px;
-  line-height: 1.6;
-  color: #8a95a1;
 }
 .hero-visual {
   position: relative;
@@ -416,26 +409,6 @@ h1 em {
   font-size: 10px;
   letter-spacing: 0.06em;
 }
-.proof-bar {
-  border-block: 1px solid #e4e9ef;
-  background: #fff;
-}
-.proof-inner {
-  justify-content: space-between;
-  gap: 30px;
-  min-height: 76px;
-  color: #788697;
-  font-size: 12px;
-}
-.proof-inner span {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.proof-inner strong {
-  color: #314159;
-  font-weight: 600;
-}
 .section {
   padding-block: 132px;
 }
@@ -494,11 +467,6 @@ h2 {
   font-size: 12px;
   line-height: 1.8;
 }
-.item-arrow {
-  color: #abb8c7;
-  font-size: 20px;
-  line-height: 1;
-}
 .video-section {
   padding-block: 112px;
   border-top: 1px solid #e4e9ef;
@@ -514,38 +482,15 @@ h2 {
   max-width: 460px;
   margin-bottom: 22px;
 }
-.video-copy > p:last-of-type {
+.video-copy > p:last-child {
   max-width: 430px;
-  margin-bottom: 34px;
+  margin-bottom: 0;
   color: #6e7b89;
   font-size: 14px;
   line-height: 1.9;
 }
-.video-meta {
-  margin: 0;
-  border-top: 1px solid #dce3eb;
-}
-.video-meta div {
-  display: grid;
-  grid-template-columns: 68px 1fr;
-  gap: 18px;
-  padding-block: 13px;
-  border-bottom: 1px solid #dce3eb;
-}
-.video-meta dt,
-.video-meta dd {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.6;
-}
-.video-meta dt {
-  color: #8c98a5;
-}
-.video-meta dd {
-  color: #314159;
-  font-weight: 600;
-}
 .video-frame {
+  min-width: 0;
   margin: 0;
 }
 .video-frame video {
@@ -562,34 +507,6 @@ h2 {
   color: #8a95a1;
   font-size: 11px;
   text-align: right;
-}
-.quote-section {
-  padding-block: 70px;
-  background: #172a43;
-  color: #fff;
-}
-.quote-inner {
-  display: grid;
-  grid-template-columns: 0.75fr 1.25fr;
-  gap: 85px;
-  align-items: center;
-}
-.quote-section .section-label {
-  color: #7aa8ff;
-}
-.quote-section h2 {
-  max-width: 320px;
-  margin: 0;
-  font-size: 32px;
-}
-blockquote {
-  margin: 0;
-  padding-left: 28px;
-  border-left: 2px solid #6e9eff;
-  font-size: 20px;
-  font-weight: 500;
-  line-height: 1.9;
-  letter-spacing: -0.025em;
 }
 .start-section {
   padding-bottom: 70px;
@@ -662,6 +579,15 @@ blockquote {
   color: #9ba6b2;
   font-size: 10px;
 }
+.start-prompt {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border-left: 2px solid #6e9eff;
+  background: #edf3fa;
+  color: #4f6175;
+  font-size: 11px;
+  line-height: 1.75;
+}
 .start-actions {
   gap: 27px;
   margin-top: 36px;
@@ -711,11 +637,6 @@ blockquote {
   gap: 8px;
   font-size: 14px;
   font-weight: 700;
-}
-.footer-inner p {
-  margin: 0;
-  color: #8c98a5;
-  font-size: 11px;
 }
 .footer-links {
   gap: 20px;
@@ -782,9 +703,6 @@ blockquote {
   .hero-description {
     font-size: 14px;
   }
-  .hero-note {
-    font-size: 10px;
-  }
   .hero-visual {
     min-height: 0;
     padding: 16px;
@@ -795,27 +713,11 @@ blockquote {
   .canvas-selection {
     width: 85%;
   }
-  .proof-inner {
-    min-height: 0;
-    padding-block: 21px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px 15px;
-    font-size: 10px;
-  }
-  .proof-inner span {
-    display: block;
-  }
-  .proof-inner strong {
-    display: block;
-    margin-top: 3px;
-  }
   .section {
     padding-block: 88px;
   }
   .workflow-section,
-  .video-layout,
-  .quote-inner {
+  .video-layout {
     grid-template-columns: 1fr;
     gap: 30px;
   }
@@ -831,24 +733,11 @@ blockquote {
   .video-section {
     padding-block: 78px;
   }
-  .video-copy > p:last-of-type {
+  .video-copy > p:last-child {
     max-width: 520px;
-  }
-  .video-meta {
-    margin-bottom: 16px;
   }
   .video-frame figcaption {
     text-align: left;
-  }
-  .quote-section {
-    padding-block: 66px;
-  }
-  .quote-section h2 {
-    max-width: none;
-    font-size: 29px;
-  }
-  blockquote {
-    font-size: 17px;
   }
   .start-section {
     padding-bottom: 50px;
@@ -877,10 +766,6 @@ blockquote {
     flex-wrap: wrap;
     gap: 10px 20px;
     padding-block: 30px;
-  }
-  .footer-inner p {
-    order: 3;
-    width: 100%;
   }
   .footer-links {
     margin-left: auto;
@@ -915,9 +800,6 @@ blockquote {
   }
   .output-file {
     font-size: 8px;
-  }
-  .proof-inner {
-    grid-template-columns: 1fr 1fr;
   }
   .start-actions {
     align-items: flex-start;
